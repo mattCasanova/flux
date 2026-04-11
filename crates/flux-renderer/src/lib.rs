@@ -42,7 +42,13 @@ pub struct Renderer {
 
 impl Renderer {
     /// Create a new renderer attached to a winit window.
-    pub fn new(window: Arc<winit::window::Window>, font_family: &str, font_size: f32) -> Result<Self> {
+    pub fn new(
+        window: Arc<winit::window::Window>,
+        font_family: &str,
+        font_size: f32,
+        line_height: f32,
+        bold: bool,
+    ) -> Result<Self> {
         let gpu = gpu::GpuContext::new(window)?;
 
         // Create glyph atlas
@@ -51,6 +57,8 @@ impl Renderer {
             &gpu.queue,
             font_family,
             font_size,
+            line_height,
+            bold,
         )?;
 
         // Create static quad vertex buffer (never changes)
@@ -118,6 +126,39 @@ impl Renderer {
         }
     }
 
+    /// Rebuild the glyph atlas with a new font size (e.g., after scale factor change).
+    pub fn rebuild_font(
+        &mut self,
+        font_family: &str,
+        font_size: f32,
+        line_height: f32,
+        bold: bool,
+    ) -> Result<()> {
+        self.atlas = atlas::GlyphAtlas::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            font_family,
+            font_size,
+            line_height,
+            bold,
+        )?;
+
+        // Rebuild bind group with new atlas texture
+        self.bind_group = pipeline::create_bind_group(
+            &self.gpu.device,
+            &self.bind_group_layout,
+            &self.uniform_buffer,
+            &self.atlas.texture_view,
+            &self.sampler,
+        );
+
+        // Clear instance buffer — caller should call set_text again
+        self.instance_buffer = None;
+        self.instance_count = 0;
+
+        Ok(())
+    }
+
     /// Handle window resize.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
@@ -137,8 +178,7 @@ impl Renderer {
 
     /// Render some static text at a given position. For testing.
     pub fn set_text(&mut self, text: &str, x: f32, y: f32, fg: Color, bg: Color) {
-        let font_family = "Menlo"; // TODO: from config
-        let shaped = self.atlas.shape_text(text, font_family);
+        let shaped = self.atlas.shape_text(text);
 
         let mut instances: Vec<CellInstance> = Vec::new();
 

@@ -43,11 +43,13 @@ pub(crate) struct GlyphAtlas {
     // Glyph cache
     cache: HashMap<GlyphKey, GlyphRegion>,
 
-    // Font metrics
+    // Font settings
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
     pub line_height: f32,
+    font_family: String,
+    bold: bool,
 }
 
 impl GlyphAtlas {
@@ -57,13 +59,16 @@ impl GlyphAtlas {
         queue: &wgpu::Queue,
         font_family: &str,
         font_size: f32,
+        line_height: f32,
+        bold: bool,
     ) -> Result<Self> {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
 
         // Calculate cell dimensions from font metrics
-        let metrics = Metrics::new(font_size, font_size * 1.2);
-        let (cell_width, cell_height) = Self::measure_cell(&mut font_system, font_family, &metrics);
+        let line_height_px = font_size * line_height;
+        let metrics = Metrics::new(font_size, line_height_px);
+        let (cell_width, cell_height) = Self::measure_cell(&mut font_system, font_family, bold, &metrics);
 
         // Create atlas texture (1024x1024 R8Unorm — grayscale)
         let atlas_size = 1024u32;
@@ -119,7 +124,9 @@ impl GlyphAtlas {
             cell_width,
             cell_height,
             font_size,
-            line_height: font_size * 1.2,
+            line_height: line_height_px,
+            font_family: font_family.to_string(),
+            bold,
         })
     }
 
@@ -127,14 +134,19 @@ impl GlyphAtlas {
     fn measure_cell(
         font_system: &mut FontSystem,
         font_family: &str,
+        bold: bool,
         metrics: &Metrics,
     ) -> (f32, f32) {
         // Create a buffer with a single character to measure
         let mut buffer = Buffer::new(font_system, *metrics);
+        let mut attrs = Attrs::new().family(Family::Name(font_family));
+        if bold {
+            attrs = attrs.weight(cosmic_text::fontdb::Weight::BOLD);
+        }
         buffer.set_text(
             font_system,
             "M",
-            &Attrs::new().family(Family::Name(font_family)),
+            &attrs,
             cosmic_text::Shaping::Advanced,
             None,
         );
@@ -253,14 +265,17 @@ impl GlyphAtlas {
     pub fn shape_text(
         &mut self,
         text: &str,
-        font_family: &str,
     ) -> Vec<ShapedGlyph> {
         let metrics = Metrics::new(self.font_size, self.line_height);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        let mut attrs = Attrs::new().family(Family::Name(&self.font_family));
+        if self.bold {
+            attrs = attrs.weight(cosmic_text::fontdb::Weight::BOLD);
+        }
         buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::Name(font_family)),
+            &attrs,
             cosmic_text::Shaping::Advanced,
             None,
         );
