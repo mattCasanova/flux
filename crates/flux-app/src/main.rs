@@ -70,6 +70,10 @@ impl ApplicationHandler for App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(physical_size.width, physical_size.height);
                 }
+                // Redraw after resize
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = &mut self.renderer {
@@ -77,10 +81,8 @@ impl ApplicationHandler for App {
                         log::error!("Render error: {}", e);
                     }
                 }
-                // Request another frame
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                // Don't request another frame — only render when something changes.
+                // Future: PTY output, input editor changes, cursor blink will trigger redraws.
             }
             _ => {}
         }
