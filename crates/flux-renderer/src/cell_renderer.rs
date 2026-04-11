@@ -51,16 +51,14 @@ impl QuadVertex {
             array_stride: std::mem::size_of::<QuadVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                // position
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
-                    offset: 0,
+                    offset: std::mem::offset_of!(QuadVertex, position) as u64,
                     shader_location: 0,
                 },
-                // uv
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
-                    offset: 8,
+                    offset: std::mem::offset_of!(QuadVertex, uv) as u64,
                     shader_location: 1,
                 },
             ],
@@ -74,34 +72,29 @@ impl CellInstance {
             array_stride: std::mem::size_of::<CellInstance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                // position
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
-                    offset: 0,
+                    offset: std::mem::offset_of!(CellInstance, position) as u64,
                     shader_location: 2,
                 },
-                // size
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
-                    offset: 8,
+                    offset: std::mem::offset_of!(CellInstance, size) as u64,
                     shader_location: 3,
                 },
-                // glyph_uv
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
-                    offset: 16,
+                    offset: std::mem::offset_of!(CellInstance, glyph_uv) as u64,
                     shader_location: 4,
                 },
-                // fg_color
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
-                    offset: 32,
+                    offset: std::mem::offset_of!(CellInstance, fg_color) as u64,
                     shader_location: 5,
                 },
-                // bg_color
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
-                    offset: 48,
+                    offset: std::mem::offset_of!(CellInstance, bg_color) as u64,
                     shader_location: 6,
                 },
             ],
