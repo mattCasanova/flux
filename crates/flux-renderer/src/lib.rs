@@ -3,14 +3,6 @@
 //! ALL wgpu code lives in this crate. Nothing outside flux-renderer
 //! imports wgpu. Other crates interact through [flux_types] data
 //! structures only.
-//!
-//! ## Modules
-//!
-//! - [gpu] — wgpu device, queue, surface setup
-//! - [atlas] — glyph atlas (cosmic-text rasterization + etagere packing)
-//! - [pipeline] — render pipeline creation (shaders, bind groups)
-//! - [cell_renderer] — instanced cell rendering
-//! - [ui_renderer] — non-cell UI (tab bar, block chrome, input area)
 
 mod gpu;
 mod atlas;
@@ -18,42 +10,82 @@ mod pipeline;
 mod cell_renderer;
 mod ui_renderer;
 
-use flux_types::{CellData, Color, RenderGrid, Rect};
+use std::sync::Arc;
+use anyhow::Result;
+use flux_types::Color;
 
-/// Screen layout — defines where each UI region lives.
-pub struct ScreenLayout {
-    pub output_area: Rect,
-    pub input_area: Rect,
-    pub tab_bar: Rect,
+/// The renderer — owns all GPU state and renders frames.
+pub struct Renderer {
+    gpu: gpu::GpuContext,
+    clear_color: Color,
 }
 
-/// Data needed to render a single tab in the tab bar.
-pub struct TabRenderData {
-    pub title: String,
-    pub is_active: bool,
-    pub has_activity: bool,
-    pub color: Option<Color>,
-}
+impl Renderer {
+    /// Create a new renderer attached to a winit window.
+    pub fn new(window: Arc<winit::window::Window>) -> Result<Self> {
+        let gpu = gpu::GpuContext::new(window)?;
+        Ok(Self {
+            gpu,
+            clear_color: Color::from_hex("#24283b").unwrap(), // Tokyo Night Storm bg
+        })
+    }
 
-/// Everything needed to render one frame.
-pub struct FrameData {
-    pub layout: ScreenLayout,
-    pub output_grid: RenderGrid,
-    pub input_text: Vec<CellData>,
-    pub input_cursor_pos: usize,
-    pub tabs: Vec<TabRenderData>,
-    pub active_tab: usize,
-    pub clear_color: Color,
-}
+    /// Handle window resize.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.gpu.resize(width, height);
+    }
 
-/// Cell dimensions in pixels — needed for grid size calculations.
-pub struct CellMetrics {
-    pub width: f32,
-    pub height: f32,
-}
+    /// Set the clear color (background).
+    pub fn set_clear_color(&mut self, color: Color) {
+        self.clear_color = color;
+    }
 
-// TODO: Implement the Renderer and wire up all modules.
-// Phase 1, Step 1: gpu.rs — create wgpu device + surface
-// Phase 1, Step 2: atlas.rs — glyph rasterization + packing
-// Phase 1, Step 4: cell_renderer.rs — instanced cell rendering
-// Phase 1, Step 5: ui_renderer.rs — input area rendering
+    /// Render a frame. For now, just clears to the background color.
+    pub fn render(&mut self) -> Result<()> {
+        let output = match self.gpu.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()), // skip this frame
+            other => return Err(anyhow::anyhow!("Surface texture error: {:?}", other)),
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Flux Render Encoder"),
+            },
+        );
+
+        // Clear the screen to our background color
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: self.clear_color.r as f64,
+                            g: self.clear_color.g as f64,
+                            b: self.clear_color.b as f64,
+                            a: self.clear_color.a as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            // render pass ends when dropped
+        }
+
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        Ok(())
+    }
+}
