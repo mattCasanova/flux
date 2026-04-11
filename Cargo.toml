@@ -1,0 +1,42 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mattcasanova/flux"
+
+[workspace.dependencies]
+# GPU
+wgpu = "29"
+winit = "0.30"
+pollster = "0.4"
+
+# Text
+cosmic-text = "0.18"
+etagere = "0.2"
+
+# Terminal
+alacritty_terminal = "0.26"
+
+# PTY
+portable-pty = "0.9"
+
+# Utilities
+bytemuck = { version = "1", features = ["derive"] }
+bitflags = "2"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+dirs = "6"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# Workspace crates
+flux-types = { path = "crates/flux-types" }
+flux-renderer = { path = "crates/flux-renderer" }
+flux-terminal = { path = "crates/flux-terminal" }
+flux-shell = { path = "crates/flux-shell" }
+flux-input = { path = "crates/flux-input" }

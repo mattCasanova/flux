@@ -1,0 +1,9 @@
+[package]
+name = "flux-types"
+description = "Shared types for the Flux terminal emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bitflags = { workspace = true }

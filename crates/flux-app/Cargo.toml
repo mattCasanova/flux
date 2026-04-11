@@ -1,0 +1,24 @@
+[package]
+name = "flux-app"
+description = "Flux terminal emulator — the binary that ties everything together"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flux"
+path = "src/main.rs"
+
+[dependencies]
+flux-types = { workspace = true }
+flux-renderer = { workspace = true }
+flux-terminal = { workspace = true }
+flux-shell = { workspace = true }
+flux-input = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }

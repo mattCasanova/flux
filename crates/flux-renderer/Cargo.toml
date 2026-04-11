@@ -1,0 +1,15 @@
+[package]
+name = "flux-renderer"
+description = "GPU rendering for the Flux terminal emulator. All wgpu code lives here."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flux-types = { workspace = true }
+wgpu = { workspace = true }
+cosmic-text = { workspace = true }
+etagere = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }

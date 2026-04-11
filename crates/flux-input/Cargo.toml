@@ -1,0 +1,10 @@
+[package]
+name = "flux-input"
+description = "Input editor, keybindings, and completion for Flux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flux-types = { workspace = true }
+log = { workspace = true }

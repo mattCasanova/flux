@@ -1,0 +1,13 @@
+[package]
+name = "flux-terminal"
+description = "Terminal state, PTY management, and ANSI parsing for Flux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flux-types = { workspace = true }
+alacritty_terminal = { workspace = true }
+portable-pty = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
