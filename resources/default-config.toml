@@ -1,0 +1,40 @@
+# Flux Terminal Configuration
+#
+# Edit this file to customize Flux. Changes take effect on restart.
+# (Hot-reload coming in a future release.)
+#
+# All colors are hex RGB (e.g., "#7aa2f7").
+
+[font]
+# Font family — must be installed on your system.
+# Common monospace fonts: "Menlo", "JetBrains Mono", "Fira Code",
+# "SauceCodePro Nerd Font Mono", "SF Mono"
+family = "Menlo"
+
+# Font size in points (same units as iTerm2 / VS Code).
+size = 14.0
+
+# Font weight: "normal" or "bold"
+weight = "normal"
+
+# Font style: "normal" or "italic"
+style = "normal"
+
+# Line height multiplier. 1.0 = tight, 1.2 = normal, 2.0 = spacious.
+# iTerm2's "Vertical Spacing" uses the same multiplier.
+line_height = 1.2
+
+[window]
+# Window title.
+title = "Flux — 1.21 gigawatts"
+
+# Default window size in logical pixels.
+width = 1200
+height = 800
+
+[theme]
+# Terminal background color.
+background = "#24283b"
+
+# Default text (foreground) color.
+foreground = "#c0caf5"

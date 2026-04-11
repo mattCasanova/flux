@@ -1,8 +1,15 @@
 //! Configuration loading from ~/.config/flux/config.toml
+//!
+//! On first run, generates a default config file with comments
+//! so the user has something to edit.
 
 use anyhow::Result;
 use serde::Deserialize;
 use std::path::PathBuf;
+
+/// The default config file content — loaded from resources/default-config.toml
+/// and compiled into the binary. Editable as a resource file, not inline code.
+const DEFAULT_CONFIG: &str = include_str!("../../../resources/default-config.toml");
 
 #[derive(Debug, Deserialize)]
 pub struct FluxConfig {
@@ -47,7 +54,7 @@ pub struct ThemeConfig {
 }
 
 // Defaults
-fn default_font_family() -> String { "Fira Code".into() }
+fn default_font_family() -> String { "Menlo".into() }
 fn default_font_size() -> f32 { 14.0 }
 fn default_font_weight() -> String { "normal".into() }
 fn default_font_style() -> String { "normal".into() }
@@ -100,7 +107,8 @@ impl Default for ThemeConfig {
 }
 
 impl FluxConfig {
-    /// Load config from ~/.config/flux/config.toml, falling back to defaults.
+    /// Load config from ~/.config/flux/config.toml.
+    /// If no config exists, generate the default one on first run.
     pub fn load() -> Result<Self> {
         let path = Self::config_path();
 
@@ -110,11 +118,22 @@ impl FluxConfig {
             log::info!("Loaded config from {}", path.display());
             Ok(config)
         } else {
-            log::info!("No config file found, using defaults");
+            Self::generate_default(&path)?;
+            log::info!("Generated default config at {}", path.display());
             Ok(Self::default())
         }
     }
 
+    /// Generate the default config file with comments.
+    fn generate_default(path: &PathBuf) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, DEFAULT_CONFIG)?;
+        Ok(())
+    }
+
+    /// Resolve the config file path.
     fn config_path() -> PathBuf {
         // Prefer ~/.config/flux/ (conventional for CLI tools on all platforms)
         let dot_config = dirs::home_dir().unwrap().join(".config/flux/config.toml");
@@ -130,7 +149,7 @@ impl FluxConfig {
             return platform;
         }
 
-        // Default to ~/.config even if neither exists (for error message)
+        // Default to ~/.config — will be created on first run
         dot_config
     }
 }
