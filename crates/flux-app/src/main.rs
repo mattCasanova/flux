@@ -27,7 +27,8 @@ fn main() -> Result<()> {
     println!("Flux v0.1.0 — 1.21 gigawatts");
 
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(config);
+    let proxy = event_loop.create_proxy();
+    let mut app = App::new(config, proxy);
     event_loop.run_app(&mut app)?;
 
     Ok(())

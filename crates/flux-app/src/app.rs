@@ -8,28 +8,30 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
 use flux_terminal::pty::{PtyEvent, PtyManager};
+use flux_terminal::state::{TermEvent, TerminalState};
 use flux_types::Color;
 
 use crate::config::FluxConfig;
 
-/// Application state — owns the window, renderer, and PTY.
+/// Application state — owns the window, renderer, PTY, and terminal state.
 pub struct App {
     config: FluxConfig,
+    proxy: winit::event_loop::EventLoopProxy<()>,
     window: Option<Arc<Window>>,
     renderer: Option<flux_renderer::Renderer>,
     pty: Option<PtyManager>,
-    /// Accumulated PTY output for display (temporary — replaced by terminal grid).
-    output_text: String,
+    terminal: Option<TerminalState>,
 }
 
 impl App {
-    pub fn new(config: FluxConfig) -> Self {
+    pub fn new(config: FluxConfig, proxy: winit::event_loop::EventLoopProxy<()>) -> Self {
         Self {
             config,
+            proxy,
             window: None,
             renderer: None,
             pty: None,
-            output_text: String::new(),
+            terminal: None,
         }
     }
 }
@@ -66,16 +68,25 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                self.process_pty_output();
                 self.handle_redraw();
             }
 
-            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => {
                 self.handle_keyboard(event);
             }
 
             _ => {}
         }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        // PTY output arrived — process and redraw
+        self.process_pty_output();
+        self.request_redraw();
     }
 }
 
@@ -93,45 +104,46 @@ impl App {
         let window = Arc::new(event_loop.create_window(window_attrs)?);
         let renderer = self.create_renderer(&window)?;
 
-        log::info!("Renderer initialized");
-        self.renderer = Some(renderer);
+        // Calculate grid dimensions from window size and cell metrics
+        let metrics = renderer.cell_metrics();
+        let inner_size = window.inner_size();
+        let cols = (inner_size.width as f32 / metrics.width) as usize;
+        let rows = (inner_size.height as f32 / metrics.height) as usize;
+        log::info!("Grid: {}x{}", cols, rows);
 
-        // Spawn the PTY
+        // Create terminal state
+        let terminal = TerminalState::new(cols.max(1), rows.max(1));
+
+        // Spawn the PTY with matching dimensions
         let shell = flux_shell::detect_shell();
+        let proxy = self.proxy.clone();
+        let wake = Box::new(move || {
+            let _ = proxy.send_event(());
+        });
         let pty = PtyManager::spawn(
             shell.binary().to_str().unwrap_or("/bin/zsh"),
-            80,
-            24,
+            cols.max(1) as u16,
+            rows.max(1) as u16,
+            wake,
         )?;
-        log::info!("PTY spawned");
-        self.pty = Some(pty);
 
+        log::info!("Renderer + PTY initialized");
+        self.renderer = Some(renderer);
+        self.terminal = Some(terminal);
+        self.pty = Some(pty);
         self.window = Some(window);
 
-        // Request first frame
         self.request_redraw();
 
         Ok(())
     }
 
-    fn scaled_font_size(&self, scale_factor: f32) -> f32 {
-        self.config.font.size * scale_factor
-    }
-
-    fn is_bold(&self) -> bool {
-        self.config.font.weight.to_lowercase() == "bold"
-    }
-
-    fn create_renderer(&self, window: &Arc<Window>) -> anyhow::Result<flux_renderer::Renderer> {
+    fn create_renderer(
+        &self,
+        window: &Arc<Window>,
+    ) -> anyhow::Result<flux_renderer::Renderer> {
         let scale_factor = window.scale_factor() as f32;
-        let font_size_px = self.scaled_font_size(scale_factor);
-
-        log::info!(
-            "Scale factor: {}, font size: {}pt -> {}px",
-            scale_factor,
-            self.config.font.size,
-            font_size_px,
-        );
+        let font_size_px = self.config.font.size * scale_factor;
 
         let mut renderer = flux_renderer::Renderer::new(
             window.clone(),
@@ -145,31 +157,25 @@ impl App {
             renderer.set_clear_color(bg);
         }
 
-        let metrics = renderer.cell_metrics();
-        log::info!(
-            "Font: {} {}pt ({}), cell: {:.1}x{:.1}",
-            self.config.font.family,
-            self.config.font.size,
-            self.config.font.weight,
-            metrics.width,
-            metrics.height,
-        );
-
         Ok(renderer)
     }
 
-    /// Check for new PTY output and update the display.
+    fn is_bold(&self) -> bool {
+        self.config.font.weight.to_lowercase() == "bold"
+    }
+
+    /// Process pending PTY output through alacritty_terminal.
     fn process_pty_output(&mut self) {
         let Some(pty) = &self.pty else { return };
+        let Some(terminal) = &mut self.terminal else { return };
 
-        let mut got_output = false;
+        let mut dirty = false;
+
         for event in pty.read_events() {
             match event {
                 PtyEvent::Output(bytes) => {
-                    // For now, just accumulate as text (temporary — replaced by alacritty_terminal)
-                    let text = String::from_utf8_lossy(&bytes);
-                    self.output_text.push_str(&text);
-                    got_output = true;
+                    terminal.process_bytes(&bytes);
+                    dirty = true;
                 }
                 PtyEvent::Exited => {
                     log::info!("Shell exited");
@@ -177,31 +183,41 @@ impl App {
             }
         }
 
-        if got_output {
+        // Handle events from alacritty_terminal (PtyWrite responses)
+        if dirty {
+            for event in terminal.drain_events() {
+                match event {
+                    TermEvent::PtyWrite(text) => {
+                        if let Some(pty) = &mut self.pty {
+                            let _ = pty.write(text.as_bytes());
+                        }
+                    }
+                    TermEvent::Title(title) => {
+                        if let Some(window) = &self.window {
+                            window.set_title(&title);
+                        }
+                    }
+                    TermEvent::Bell => {
+                        log::debug!("Bell");
+                    }
+                }
+            }
+
             self.update_display();
         }
     }
 
-    /// Update the rendered text from accumulated output.
+    /// Render the terminal grid.
     fn update_display(&mut self) {
-        let renderer = self.renderer.as_mut().expect("renderer not initialized");
+        let Some(terminal) = &self.terminal else { return };
+        let Some(renderer) = &mut self.renderer else { return };
+
         let fg = Color::from_hex(&self.config.theme.foreground).unwrap_or(Color::default());
-        let bg = Color::new(0.0, 0.0, 0.0, 0.0);
+        let bg = Color::from_hex(&self.config.theme.background)
+            .unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
 
-        // Show the last chunk of output (temporary — will be replaced by terminal grid)
-        let display_text = if self.output_text.len() > 200 {
-            &self.output_text[self.output_text.len() - 200..]
-        } else {
-            &self.output_text
-        };
-
-        // Strip control characters for raw display (temporary)
-        let clean: String = display_text
-            .chars()
-            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-            .collect();
-
-        renderer.set_text(&clean, 20.0, 40.0, fg, bg);
+        let grid = terminal.render_grid(fg, bg);
+        renderer.set_grid(&grid);
     }
 
     fn handle_keyboard(&mut self, event: winit::event::KeyEvent) {
@@ -214,14 +230,30 @@ impl App {
 
         let Some(pty) = &mut self.pty else { return };
 
-        // For now, forward all text input directly to PTY
-        // (temporary — will go through input editor later)
         match &event.logical_key {
             Key::Named(winit::keyboard::NamedKey::Enter) => {
                 let _ = pty.write(b"\r");
             }
             Key::Named(winit::keyboard::NamedKey::Backspace) => {
                 let _ = pty.write(b"\x7f");
+            }
+            Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                let _ = pty.write(b"\x1b[A");
+            }
+            Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                let _ = pty.write(b"\x1b[B");
+            }
+            Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
+                let _ = pty.write(b"\x1b[C");
+            }
+            Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
+                let _ = pty.write(b"\x1b[D");
+            }
+            Key::Named(winit::keyboard::NamedKey::Tab) => {
+                let _ = pty.write(b"\t");
+            }
+            Key::Named(winit::keyboard::NamedKey::Escape) => {
+                let _ = pty.write(b"\x1b");
             }
             _ => {
                 if let Some(text) = &event.text {
@@ -234,13 +266,28 @@ impl App {
     }
 
     fn handle_resize(&mut self, width: u32, height: u32) {
-        let renderer = self.renderer.as_mut().expect("renderer not initialized");
+        let Some(renderer) = &mut self.renderer else { return };
         renderer.resize(width, height);
+
+        // Recalculate grid dimensions and resize PTY + terminal
+        let metrics = renderer.cell_metrics();
+        let cols = (width as f32 / metrics.width) as usize;
+        let rows = (height as f32 / metrics.height) as usize;
+
+        if cols > 0 && rows > 0 {
+            if let Some(terminal) = &mut self.terminal {
+                terminal.resize(cols, rows);
+            }
+            if let Some(pty) = &mut self.pty {
+                let _ = pty.resize(cols as u16, rows as u16);
+            }
+        }
+
         self.request_redraw();
     }
 
     fn handle_redraw(&mut self) {
-        let renderer = self.renderer.as_mut().expect("renderer not initialized");
+        let Some(renderer) = &mut self.renderer else { return };
         if let Err(e) = renderer.render() {
             log::error!("Render error: {}", e);
         }
@@ -250,22 +297,23 @@ impl App {
         log::info!("Scale factor changed to {}", scale_factor);
 
         let font_size_px = self.config.font.size * scale_factor;
-        let bold = self.is_bold();
         let font_family = self.config.font.family.clone();
         let line_height = self.config.font.line_height;
+        let bold = self.is_bold();
 
-        let renderer = self.renderer.as_mut().expect("renderer not initialized");
+        let Some(renderer) = &mut self.renderer else { return };
         if let Err(e) = renderer.rebuild_font(&font_family, font_size_px, line_height, bold) {
             log::error!("Failed to rebuild font: {}", e);
             return;
         }
 
-        self.update_display();
+        // Recalculate grid after font change
+        if let Some(window) = &self.window {
+            let size = window.inner_size();
+            renderer.resize(size.width, size.height);
+        }
 
-        let window = self.window.as_ref().expect("window not initialized");
-        let size = window.inner_size();
-        let renderer = self.renderer.as_mut().expect("renderer not initialized");
-        renderer.resize(size.width, size.height);
+        self.update_display();
         self.request_redraw();
     }
 

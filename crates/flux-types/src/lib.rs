@@ -105,12 +105,15 @@ pub struct RenderGrid {
     pub cells: Vec<CellData>,
     pub cols: usize,
     pub rows: usize,
+    /// Cursor position (col, row). None if cursor is hidden.
+    pub cursor: Option<(usize, usize)>,
 }
 
 impl RenderGrid {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
             cells: vec![CellData::default(); cols * rows],
+            cursor: None,
             cols,
             rows,
         }

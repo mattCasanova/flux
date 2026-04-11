@@ -116,6 +116,77 @@ impl Renderer {
         self.write_instances(&instances);
     }
 
+    /// Render a terminal grid — each cell at its grid position.
+    pub fn set_grid(&mut self, grid: &flux_types::RenderGrid) {
+        let cell_w = self.atlas.cell_width;
+        let cell_h = self.atlas.cell_height;
+
+        let mut instances: Vec<CellInstance> = Vec::with_capacity(grid.cols * grid.rows);
+
+        for row in 0..grid.rows {
+            for col in 0..grid.cols {
+                let cell = grid.get(row, col);
+                let x = col as f32 * cell_w;
+                let y = row as f32 * cell_h;
+
+                let is_cursor = grid.cursor == Some((col, row));
+
+                if is_cursor {
+                    // Render cursor as a filled block (inverted colors).
+                    // Use a space glyph's UV (or zero UV) with solid fg as bg.
+                    let cursor_color = Color::from_hex("#c0caf5").unwrap_or(Color::default());
+
+                    // First: draw cursor background block
+                    instances.push(CellInstance {
+                        position: [x, y],
+                        size: [cell_w, cell_h],
+                        glyph_uv: [0.0, 0.0, 0.0, 0.0], // no glyph — solid color
+                        fg_color: [cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a],
+                        bg_color: [cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a],
+                    });
+
+                    // Then: draw the character under the cursor with inverted colors
+                    if cell.character != ' ' && cell.character != '\0' {
+                        let bg_color = Color::from_hex("#24283b").unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
+                        self.render_glyph(cell.character, x, y, cell_h, bg_color, cursor_color, &mut instances);
+                    }
+                } else if cell.character != ' ' && cell.character != '\0' {
+                    self.render_glyph(cell.character, x, y, cell_h, cell.fg, cell.bg, &mut instances);
+                }
+            }
+        }
+
+        self.write_instances(&instances);
+    }
+
+    /// Render a single glyph character at a grid position.
+    fn render_glyph(
+        &mut self,
+        character: char,
+        x: f32,
+        y: f32,
+        cell_h: f32,
+        fg: Color,
+        bg: Color,
+        instances: &mut Vec<CellInstance>,
+    ) {
+        let shaped = self.atlas.shape_text(&character.to_string());
+        for glyph in &shaped {
+            if let Some(region) = self.atlas.lookup(&self.gpu.queue, glyph.cache_key) {
+                instances.push(CellInstance {
+                    position: [
+                        x + region.placement_left,
+                        y + cell_h - region.placement_top,
+                    ],
+                    size: [region.pixel_width, region.pixel_height],
+                    glyph_uv: region.uv,
+                    fg_color: [fg.r, fg.g, fg.b, fg.a],
+                    bg_color: [bg.r, bg.g, bg.b, bg.a],
+                });
+            }
+        }
+    }
+
     /// Write instance data to the pre-allocated GPU buffer.
     /// Grows the buffer if needed (rare — only on first oversized write).
     fn write_instances(&mut self, instances: &[CellInstance]) {

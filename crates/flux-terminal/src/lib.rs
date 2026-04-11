@@ -5,7 +5,7 @@
 //! renderer to consume.
 
 pub mod pty;
-mod state;
+pub mod state;
 
 /// The terminal's input mode — determines where keystrokes go.
 pub enum InputMode {

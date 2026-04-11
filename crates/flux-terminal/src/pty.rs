@@ -13,6 +13,9 @@ use std::thread;
 use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
+/// Callback to wake the event loop when PTY output arrives.
+pub type WakeCallback = Box<dyn Fn() + Send>;
+
 /// Messages from the PTY read thread to the main thread.
 pub enum PtyEvent {
     /// New output bytes from the shell.
@@ -32,7 +35,9 @@ pub struct PtyManager {
 
 impl PtyManager {
     /// Spawn a shell in a new PTY.
-    pub fn spawn(shell_path: &str, cols: u16, rows: u16) -> Result<Self> {
+    /// `wake` is called from the reader thread whenever new output arrives,
+    /// so the main event loop knows to request a redraw.
+    pub fn spawn(shell_path: &str, cols: u16, rows: u16, wake: WakeCallback) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -59,7 +64,7 @@ impl PtyManager {
 
         // Spawn reader thread — sends output to main thread via channel
         let (event_tx, event_rx) = mpsc::channel();
-        Self::spawn_reader_thread(reader, event_tx);
+        Self::spawn_reader_thread(reader, event_tx, wake);
 
         log::info!("PTY spawned: {} ({}x{})", shell_path, cols, rows);
 
@@ -113,6 +118,7 @@ impl PtyManager {
     fn spawn_reader_thread(
         mut reader: Box<dyn Read + Send>,
         tx: mpsc::Sender<PtyEvent>,
+        wake: WakeCallback,
     ) {
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -120,14 +126,17 @@ impl PtyManager {
                 match reader.read(&mut buf) {
                     Ok(0) => {
                         let _ = tx.send(PtyEvent::Exited);
+                        wake();
                         break;
                     }
                     Ok(n) => {
                         let _ = tx.send(PtyEvent::Output(buf[..n].to_vec()));
+                        wake(); // Tell the event loop to redraw
                     }
                     Err(e) => {
                         log::error!("PTY read error: {}", e);
                         let _ = tx.send(PtyEvent::Exited);
+                        wake();
                         break;
                     }
                 }
