@@ -4,6 +4,7 @@
 
 mod app;
 mod config;
+mod platform;
 
 use anyhow::Result;
 use app::App;
