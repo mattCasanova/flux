@@ -50,6 +50,9 @@ pub(crate) struct GlyphAtlas {
     pub line_height: f32,
     font_family: String,
     bold: bool,
+
+    // Fast char → CacheKey lookup (avoids full shaping for single characters)
+    char_cache: HashMap<char, CacheKey>,
 }
 
 impl GlyphAtlas {
@@ -127,6 +130,7 @@ impl GlyphAtlas {
             line_height: line_height_px,
             font_family: font_family.to_string(),
             bold,
+            char_cache: HashMap::new(),
         })
     }
 
@@ -258,6 +262,28 @@ impl GlyphAtlas {
 
         self.cache.insert(key, region);
         Some(region)
+    }
+
+    /// Fast single-character lookup. Caches the char → CacheKey mapping
+    /// so we only shape each character once, then it's a HashMap lookup.
+    pub fn lookup_char(
+        &mut self,
+        queue: &wgpu::Queue,
+        ch: char,
+    ) -> Option<GlyphRegion> {
+        // Check char cache first — avoids the full shaping pipeline
+        if let Some(&cache_key) = self.char_cache.get(&ch) {
+            return self.lookup(queue, cache_key);
+        }
+
+        // First time seeing this character — shape it once to get the cache key
+        let shaped = self.shape_text(&ch.to_string());
+        if let Some(glyph) = shaped.first() {
+            self.char_cache.insert(ch, glyph.cache_key);
+            self.lookup(queue, glyph.cache_key)
+        } else {
+            None
+        }
     }
 
     /// Rasterize text and return glyph positions + cache keys for rendering.

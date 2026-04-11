@@ -1,7 +1,6 @@
 //! Application state and event handling.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -22,8 +21,6 @@ pub struct App {
     renderer: Option<flux_renderer::Renderer>,
     pty: Option<PtyManager>,
     terminal: Option<TerminalState>,
-    /// Debounce resize — only recalculate grid after dragging stops.
-    last_resize: Option<(u32, u32, Instant)>,
 }
 
 impl App {
@@ -35,7 +32,6 @@ impl App {
             renderer: None,
             pty: None,
             terminal: None,
-            last_resize: None,
         }
     }
 }
@@ -135,8 +131,8 @@ impl App {
         self.renderer = Some(renderer);
         self.terminal = Some(terminal);
         self.pty = Some(pty);
-        self.window = Some(window);
 
+        self.window = Some(window);
         self.request_redraw();
 
         Ok(())
@@ -270,33 +266,19 @@ impl App {
     }
 
     fn handle_resize(&mut self, width: u32, height: u32) {
-        // Resize the GPU surface immediately (cheap, prevents black bars)
-        if let Some(renderer) = &mut self.renderer {
-            renderer.resize(width, height);
-        }
+        // Reconfigure surface + resize grid + render — all in the same event.
+        // Presenting a frame before returning from the resize handler prevents
+        // the compositor from stretching a stale frame.
 
-        // Debounce the grid + PTY resize
-        self.last_resize = Some((width, height, Instant::now()));
-        self.request_redraw();
-    }
+        // 1. Resize surface + get metrics
+        let renderer = self.renderer.as_mut().expect("renderer not initialized");
+        renderer.resize(width, height);
+        let cell_w = renderer.cell_metrics().width;
+        let cell_h = renderer.cell_metrics().height;
 
-    /// Apply a pending resize after debounce period.
-    fn apply_pending_resize(&mut self) {
-        const DEBOUNCE_MS: u128 = 100;
-
-        let Some((width, height, timestamp)) = self.last_resize else { return };
-        if timestamp.elapsed().as_millis() < DEBOUNCE_MS {
-            self.request_redraw();
-            return;
-        }
-
-        // Dragging stopped — apply the full resize
-        self.last_resize = None;
-
-        let Some(renderer) = &self.renderer else { return };
-        let metrics = renderer.cell_metrics();
-        let cols = (width as f32 / metrics.width) as usize;
-        let rows = (height as f32 / metrics.height) as usize;
+        // 2. Resize terminal grid + PTY
+        let cols = (width as f32 / cell_w) as usize;
+        let rows = (height as f32 / cell_h) as usize;
 
         if cols > 0 && rows > 0 {
             if let Some(terminal) = &mut self.terminal {
@@ -305,13 +287,17 @@ impl App {
             if let Some(pty) = &mut self.pty {
                 let _ = pty.resize(cols as u16, rows as u16);
             }
-            self.update_display();
+        }
+
+        // 3. Update display + render immediately (no RedrawRequested wait)
+        self.update_display();
+        let renderer = self.renderer.as_mut().expect("renderer not initialized");
+        if let Err(e) = renderer.render() {
+            log::error!("Resize render error: {}", e);
         }
     }
 
     fn handle_redraw(&mut self) {
-        self.apply_pending_resize();
-
         let Some(renderer) = &mut self.renderer else { return };
         if let Err(e) = renderer.render() {
             log::error!("Render error: {}", e);

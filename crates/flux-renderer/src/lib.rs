@@ -160,6 +160,7 @@ impl Renderer {
     }
 
     /// Render a single glyph character at a grid position.
+    /// Uses lookup_char for fast cached access — no full text shaping per cell.
     fn render_glyph(
         &mut self,
         character: char,
@@ -170,20 +171,17 @@ impl Renderer {
         bg: Color,
         instances: &mut Vec<CellInstance>,
     ) {
-        let shaped = self.atlas.shape_text(&character.to_string());
-        for glyph in &shaped {
-            if let Some(region) = self.atlas.lookup(&self.gpu.queue, glyph.cache_key) {
-                instances.push(CellInstance {
-                    position: [
-                        x + region.placement_left,
-                        y + cell_h - region.placement_top,
-                    ],
-                    size: [region.pixel_width, region.pixel_height],
-                    glyph_uv: region.uv,
-                    fg_color: [fg.r, fg.g, fg.b, fg.a],
-                    bg_color: [bg.r, bg.g, bg.b, bg.a],
-                });
-            }
+        if let Some(region) = self.atlas.lookup_char(&self.gpu.queue, character) {
+            instances.push(CellInstance {
+                position: [
+                    x + region.placement_left,
+                    y + cell_h - region.placement_top,
+                ],
+                size: [region.pixel_width, region.pixel_height],
+                glyph_uv: region.uv,
+                fg_color: [fg.r, fg.g, fg.b, fg.a],
+                bg_color: [bg.r, bg.g, bg.b, bg.a],
+            });
         }
     }
 
