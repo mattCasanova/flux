@@ -102,14 +102,22 @@ impl App {
             ));
 
         let window = Arc::new(event_loop.create_window(window_attrs)?);
-        let renderer = self.create_renderer(&window)?;
+        let mut renderer = self.create_renderer(&window)?;
 
-        // Calculate grid dimensions from window size and cell metrics
+        // Apply padding from config
+        let scale_factor = window.scale_factor() as f32;
+        let pad_x = self.config.window.padding_horizontal * scale_factor;
+        let pad_y = self.config.window.padding_vertical * scale_factor;
+        renderer.set_padding(pad_x, pad_y);
+
+        // Calculate grid dimensions from window size, padding, and cell metrics
         let metrics = renderer.cell_metrics();
         let inner_size = window.inner_size();
-        let cols = (inner_size.width as f32 / metrics.width) as usize;
-        let rows = (inner_size.height as f32 / metrics.height) as usize;
-        log::info!("Grid: {}x{}", cols, rows);
+        let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
+        let cols = (usable_w / metrics.width) as usize;
+        let rows = (usable_h / metrics.height) as usize;
+        log::info!("Grid: {}x{} (padding {}x{})", cols, rows, pad_x, pad_y);
 
         // Create terminal state
         let terminal = TerminalState::new(cols.max(1), rows.max(1));
@@ -222,7 +230,8 @@ impl App {
 
     fn handle_keyboard(&mut self, event: winit::event::KeyEvent) {
         use winit::event::ElementState;
-        use winit::keyboard::Key;
+        use winit::keyboard::{Key, NamedKey};
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
         if event.state != ElementState::Pressed {
             return;
@@ -230,35 +239,33 @@ impl App {
 
         let Some(pty) = &mut self.pty else { return };
 
-        match &event.logical_key {
-            Key::Named(winit::keyboard::NamedKey::Enter) => {
-                let _ = pty.write(b"\r");
-            }
-            Key::Named(winit::keyboard::NamedKey::Backspace) => {
-                let _ = pty.write(b"\x7f");
-            }
-            Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
-                let _ = pty.write(b"\x1b[A");
-            }
-            Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
-                let _ = pty.write(b"\x1b[B");
-            }
-            Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
-                let _ = pty.write(b"\x1b[C");
-            }
-            Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
-                let _ = pty.write(b"\x1b[D");
-            }
-            Key::Named(winit::keyboard::NamedKey::Tab) => {
-                let _ = pty.write(b"\t");
-            }
-            Key::Named(winit::keyboard::NamedKey::Escape) => {
-                let _ = pty.write(b"\x1b");
-            }
-            _ => {
-                if let Some(text) = &event.text {
-                    let _ = pty.write(text.as_bytes());
-                }
+        // Special keys that map to escape sequences
+        let bytes: Option<Vec<u8>> = match &event.logical_key {
+            Key::Named(NamedKey::Enter) => Some(b"\r".to_vec()),
+            Key::Named(NamedKey::Backspace) => Some(b"\x7f".to_vec()),
+            Key::Named(NamedKey::ArrowUp) => Some(b"\x1b[A".to_vec()),
+            Key::Named(NamedKey::ArrowDown) => Some(b"\x1b[B".to_vec()),
+            Key::Named(NamedKey::ArrowRight) => Some(b"\x1b[C".to_vec()),
+            Key::Named(NamedKey::ArrowLeft) => Some(b"\x1b[D".to_vec()),
+            Key::Named(NamedKey::Home) => Some(b"\x1b[H".to_vec()),
+            Key::Named(NamedKey::End) => Some(b"\x1b[F".to_vec()),
+            Key::Named(NamedKey::PageUp) => Some(b"\x1b[5~".to_vec()),
+            Key::Named(NamedKey::PageDown) => Some(b"\x1b[6~".to_vec()),
+            Key::Named(NamedKey::Delete) => Some(b"\x1b[3~".to_vec()),
+            Key::Named(NamedKey::Tab) => Some(b"\t".to_vec()),
+            Key::Named(NamedKey::Escape) => Some(b"\x1b".to_vec()),
+            _ => None,
+        };
+
+        if let Some(bytes) = bytes {
+            let _ = pty.write(&bytes);
+        } else {
+            // Regular text input — use text_with_all_modifiers() which includes
+            // Ctrl effects (Ctrl+C -> \x03, Ctrl+D -> \x04, etc.).
+            // text_with_all_modifiers is the right field for terminals; the plain
+            // `event.text` is for text editors and excludes Ctrl effects.
+            if let Some(text) = event.text_with_all_modifiers() {
+                let _ = pty.write(text.as_bytes());
             }
         }
 
@@ -276,9 +283,14 @@ impl App {
         let cell_w = renderer.cell_metrics().width;
         let cell_h = renderer.cell_metrics().height;
 
-        // 2. Resize terminal grid + PTY
-        let cols = (width as f32 / cell_w) as usize;
-        let rows = (height as f32 / cell_h) as usize;
+        // 2. Resize terminal grid + PTY (account for padding)
+        let scale_factor = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+        let pad_x = self.config.window.padding_horizontal * scale_factor;
+        let pad_y = self.config.window.padding_vertical * scale_factor;
+        let usable_w = (width as f32 - pad_x * 2.0).max(0.0);
+        let usable_h = (height as f32 - pad_y * 2.0).max(0.0);
+        let cols = (usable_w / cell_w) as usize;
+        let rows = (usable_h / cell_h) as usize;
 
         if cols > 0 && rows > 0 {
             if let Some(terminal) = &mut self.terminal {

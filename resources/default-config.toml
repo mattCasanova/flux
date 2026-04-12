@@ -32,6 +32,10 @@ title = "Flux — 1.21 gigawatts"
 width = 1200
 height = 800
 
+# Padding in logical pixels between the window edge and the terminal grid.
+padding_horizontal = 10
+padding_vertical = 10
+
 [theme]
 # Terminal background color.
 background = "#24283b"

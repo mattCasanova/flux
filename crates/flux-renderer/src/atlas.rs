@@ -77,6 +77,9 @@ pub(crate) struct GlyphAtlas {
     // Cell dimensions (for the renderer's layout calculations)
     pub cell_width: f32,
     pub cell_height: f32,
+    /// Baseline offset from the top of a cell, in pixels.
+    /// Glyph baseline = cell_top + baseline_offset.
+    pub baseline_offset: f32,
 }
 
 impl GlyphAtlas {
@@ -94,7 +97,7 @@ impl GlyphAtlas {
 
         let line_height_px = font_size * line_height;
         let metrics = Metrics::new(font_size, line_height_px);
-        let (cell_width, cell_height) =
+        let (cell_width, cell_height, baseline_offset) =
             Self::measure_cell(&mut font_system, font_family, bold, &metrics);
 
         let texture = Self::create_atlas_texture(device);
@@ -115,6 +118,7 @@ impl GlyphAtlas {
             unicode_regions: HashMap::new(),
             cell_width,
             cell_height,
+            baseline_offset,
         };
 
         atlas.preload_ascii(queue);
@@ -188,13 +192,16 @@ impl GlyphAtlas {
         );
     }
 
-    /// Measure cell dimensions from the font's monospace advance width.
+    /// Measure cell dimensions and baseline from the font's metrics.
+    /// Returns (cell_width, cell_height, baseline_offset).
+    /// baseline_offset is the distance from the top of a cell to the glyph baseline,
+    /// adjusted so the glyph box is vertically centered within the line height.
     fn measure_cell(
         font_system: &mut FontSystem,
         font_family: &str,
         bold: bool,
         metrics: &Metrics,
-    ) -> (f32, f32) {
+    ) -> (f32, f32, f32) {
         let mut buffer = Buffer::new(font_system, *metrics);
         let mut attrs = Attrs::new().family(Family::Name(font_family));
         if bold {
@@ -204,23 +211,29 @@ impl GlyphAtlas {
         buffer.shape_until_scroll(font_system, false);
 
         let mut cell_width = metrics.font_size * 0.6; // fallback
+        let mut baseline_offset = metrics.line_height * 0.8; // fallback
+
         if let Some(run) = buffer.layout_runs().next() {
             if let Some(glyph) = run.glyphs.first() {
                 cell_width = glyph.w;
             }
+            // run.line_y is the baseline from line_top (already centered within line_height
+            // by cosmic-text's layout algorithm, which accounts for font ascent/descent)
+            baseline_offset = run.line_y - run.line_top;
         }
 
         let cell_height = metrics.line_height;
 
         log::info!(
-            "Cell metrics: {:.1}x{:.1} (font: {}, size: {})",
+            "Cell metrics: {:.1}x{:.1} baseline={:.1} (font: {}, size: {})",
             cell_width,
             cell_height,
+            baseline_offset,
             font_family,
             metrics.font_size
         );
 
-        (cell_width, cell_height)
+        (cell_width, cell_height, baseline_offset)
     }
 
     /// Pre-rasterize printable ASCII (32-126) to avoid first-frame hitches.

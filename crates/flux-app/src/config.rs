@@ -35,6 +35,8 @@ pub struct WindowConfig {
     pub title: String,
     pub width: u32,
     pub height: u32,
+    pub padding_horizontal: f32,
+    pub padding_vertical: f32,
 }
 
 #[derive(Debug, Deserialize, Clone)]

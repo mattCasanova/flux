@@ -23,6 +23,7 @@ use pipeline::Uniforms;
 pub struct CellMetrics {
     pub width: f32,
     pub height: f32,
+    pub baseline_offset: f32,
 }
 
 /// Maximum cells we pre-allocate for. Grows if needed.
@@ -43,6 +44,9 @@ pub struct Renderer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
+    /// Padding around the terminal grid (pixels).
+    padding_x: f32,
+    padding_y: f32,
 }
 
 impl Renderer {
@@ -80,11 +84,20 @@ impl Renderer {
             instance_buffer,
             instance_capacity: INITIAL_MAX_CELLS,
             instance_count: 0,
+            padding_x: 0.0,
+            padding_y: 0.0,
         })
+    }
+
+    /// Set the horizontal and vertical padding between the window edge and the grid.
+    pub fn set_padding(&mut self, horizontal: f32, vertical: f32) {
+        self.padding_x = horizontal;
+        self.padding_y = vertical;
     }
 
     pub fn cell_metrics(&self) -> CellMetrics {
         CellMetrics {
+            baseline_offset: self.atlas.baseline_offset,
             width: self.atlas.cell_width,
             height: self.atlas.cell_height,
         }
@@ -113,38 +126,40 @@ impl Renderer {
     pub fn set_grid(&mut self, grid: &flux_types::RenderGrid) {
         let cell_w = self.atlas.cell_width;
         let cell_h = self.atlas.cell_height;
+        let baseline = self.atlas.baseline_offset;
+        let pad_x = self.padding_x;
+        let pad_y = self.padding_y;
 
         let mut instances: Vec<CellInstance> = Vec::with_capacity(grid.cols * grid.rows);
 
         for row in 0..grid.rows {
             for col in 0..grid.cols {
                 let cell = grid.get(row, col);
-                let x = col as f32 * cell_w;
-                let y = row as f32 * cell_h;
+                // Cell top-left corner in screen coordinates (with padding offset)
+                let cell_x = pad_x + col as f32 * cell_w;
+                let cell_y = pad_y + row as f32 * cell_h;
 
                 let is_cursor = grid.cursor == Some((col, row));
 
                 if is_cursor {
-                    // Render cursor as a filled block (inverted colors).
-                    // Use a space glyph's UV (or zero UV) with solid fg as bg.
+                    // Render cursor as a filled block at the cell bounds
                     let cursor_color = Color::from_hex("#c0caf5").unwrap_or(Color::default());
 
-                    // First: draw cursor background block
                     instances.push(CellInstance {
-                        position: [x, y],
+                        position: [cell_x, cell_y],
                         size: [cell_w, cell_h],
-                        glyph_uv: [0.0, 0.0, 0.0, 0.0], // no glyph — solid color
+                        glyph_uv: [0.0, 0.0, 0.0, 0.0],
                         fg_color: [cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a],
                         bg_color: [cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a],
                     });
 
-                    // Then: draw the character under the cursor with inverted colors
+                    // Character under the cursor (inverted colors)
                     if cell.character != ' ' && cell.character != '\0' {
                         let bg_color = Color::from_hex("#24283b").unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
-                        self.render_glyph(cell.character, x, y, cell_h, bg_color, cursor_color, &mut instances);
+                        self.render_glyph(cell.character, cell_x, cell_y, baseline, bg_color, cursor_color, &mut instances);
                     }
                 } else if cell.character != ' ' && cell.character != '\0' {
-                    self.render_glyph(cell.character, x, y, cell_h, cell.fg, cell.bg, &mut instances);
+                    self.render_glyph(cell.character, cell_x, cell_y, baseline, cell.fg, cell.bg, &mut instances);
                 }
             }
         }
@@ -153,14 +168,16 @@ impl Renderer {
     }
 
     /// Render a single glyph character at a grid position.
-    /// Uses lookup_char for fast cached access — no full text shaping per cell.
-    /// Skips rendering for null regions (control chars, spaces, missing glyphs).
+    /// `cell_x`, `cell_y` = top-left corner of the cell in screen pixels.
+    /// `baseline_offset` = distance from cell top to the glyph baseline.
+    /// The glyph's `placement_top` is the distance from baseline to top of the bitmap,
+    /// `placement_left` is the horizontal offset from the cell's origin.
     fn render_glyph(
         &mut self,
         character: char,
-        x: f32,
-        y: f32,
-        cell_h: f32,
+        cell_x: f32,
+        cell_y: f32,
+        baseline_offset: f32,
         fg: Color,
         bg: Color,
         instances: &mut Vec<CellInstance>,
@@ -172,8 +189,8 @@ impl Renderer {
 
         instances.push(CellInstance {
             position: [
-                x + region.placement_left,
-                y + cell_h - region.placement_top,
+                cell_x + region.placement_left,
+                cell_y + baseline_offset - region.placement_top,
             ],
             size: [region.pixel_width, region.pixel_height],
             glyph_uv: region.uv,

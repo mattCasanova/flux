@@ -17,5 +17,5 @@ mod keybindings;
 mod keymap;
 // mod completion;  // Phase 4
 
-pub use editor::{InputEditor, InputAction};
-pub use keybindings::{KeybindingManager, Action};
+pub use editor::{InputAction, InputEditor};
+pub use keybindings::{Action, KeybindingManager};
