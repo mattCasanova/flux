@@ -109,13 +109,6 @@ impl Renderer {
         self.clear_color = color;
     }
 
-    /// Render some static text at a given position. Temporary — for testing only.
-    pub fn set_text(&mut self, text: &str, x: f32, y: f32, fg: Color, bg: Color) {
-        let shaped = self.atlas.shape_text(text);
-        let instances = self.build_instances(&shaped, x, y, fg, bg);
-        self.write_instances(&instances);
-    }
-
     /// Render a terminal grid — each cell at its grid position.
     pub fn set_grid(&mut self, grid: &flux_types::RenderGrid) {
         let cell_w = self.atlas.cell_width;
@@ -161,6 +154,7 @@ impl Renderer {
 
     /// Render a single glyph character at a grid position.
     /// Uses lookup_char for fast cached access — no full text shaping per cell.
+    /// Skips rendering for null regions (control chars, spaces, missing glyphs).
     fn render_glyph(
         &mut self,
         character: char,
@@ -171,18 +165,21 @@ impl Renderer {
         bg: Color,
         instances: &mut Vec<CellInstance>,
     ) {
-        if let Some(region) = self.atlas.lookup_char(&self.gpu.queue, character) {
-            instances.push(CellInstance {
-                position: [
-                    x + region.placement_left,
-                    y + cell_h - region.placement_top,
-                ],
-                size: [region.pixel_width, region.pixel_height],
-                glyph_uv: region.uv,
-                fg_color: [fg.r, fg.g, fg.b, fg.a],
-                bg_color: [bg.r, bg.g, bg.b, bg.a],
-            });
+        let region = self.atlas.lookup_char(&self.gpu.queue, character);
+        if region.is_null() {
+            return;
         }
+
+        instances.push(CellInstance {
+            position: [
+                x + region.placement_left,
+                y + cell_h - region.placement_top,
+            ],
+            size: [region.pixel_width, region.pixel_height],
+            glyph_uv: region.uv,
+            fg_color: [fg.r, fg.g, fg.b, fg.a],
+            bg_color: [bg.r, bg.g, bg.b, bg.a],
+        });
     }
 
     /// Write instance data to the pre-allocated GPU buffer.
@@ -324,25 +321,4 @@ impl Renderer {
         }
     }
 
-    /// Build glyph instances from shaped text.
-    fn build_instances(&mut self, shaped: &[atlas::ShapedGlyph], x: f32, y: f32, fg: Color, bg: Color) -> Vec<CellInstance> {
-        let mut instances = Vec::with_capacity(shaped.len());
-
-        for glyph in shaped {
-            if let Some(region) = self.atlas.lookup(&self.gpu.queue, glyph.cache_key) {
-                instances.push(CellInstance {
-                    position: [
-                        x + glyph.x + region.placement_left,
-                        y + glyph.y - region.placement_top,
-                    ],
-                    size: [region.pixel_width, region.pixel_height],
-                    glyph_uv: region.uv,
-                    fg_color: [fg.r, fg.g, fg.b, fg.a],
-                    bg_color: [bg.r, bg.g, bg.b, bg.a],
-                });
-            }
-        }
-
-        instances
-    }
 }
