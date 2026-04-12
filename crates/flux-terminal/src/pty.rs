@@ -114,6 +114,34 @@ impl PtyManager {
         self.rows
     }
 
+    /// True when the child process has put the PTY into raw-ish mode —
+    /// either `ICANON` (canonical/cooked mode) or `ECHO` is off. Programs
+    /// like fzf, ssh password prompts, and readline-driven tools flip these
+    /// bits when they want unbuffered keystrokes.
+    ///
+    /// Alt-screen programs (vim, less, man, htop) don't always change
+    /// termios, so the caller should OR this with a check on
+    /// `TerminalState::is_alt_screen`.
+    #[cfg(unix)]
+    pub fn is_raw_mode(&self) -> bool {
+        use std::os::unix::io::RawFd;
+        let Some(fd): Option<RawFd> = self.master.as_raw_fd() else {
+            return false;
+        };
+        let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 {
+            return false;
+        }
+        let canonical = (termios.c_lflag & libc::ICANON) != 0;
+        let echo = (termios.c_lflag & libc::ECHO) != 0;
+        !canonical || !echo
+    }
+
+    #[cfg(not(unix))]
+    pub fn is_raw_mode(&self) -> bool {
+        false
+    }
+
     /// Spawn the background reader thread.
     fn spawn_reader_thread(
         mut reader: Box<dyn Read + Send>,

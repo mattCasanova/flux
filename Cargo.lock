@@ -675,6 +675,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "flux-types",
+ "libc",
  "log",
  "portable-pty",
 ]

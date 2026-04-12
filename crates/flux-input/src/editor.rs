@@ -1,100 +1,103 @@
-//! Input editor — the fixed prompt at the bottom of the screen.
+//! Input editor — a single-line text buffer driven by the app.
+//!
+//! The app owns key dispatch; this type is just a buffer with fine-grained
+//! edit operations. On Enter, the app calls [`InputEditor::take_line`] to
+//! extract the composed command and forward it to the PTY.
 
-/// Action produced by the editor in response to a key event.
-pub enum InputAction {
-    /// No action needed.
-    None,
-    /// Editor content changed — trigger redraw.
-    Redraw,
-    /// User hit Enter — send this command to the PTY.
-    SendCommand(String),
-    /// Forward these bytes directly to the PTY (raw mode, Ctrl+C, etc.)
-    ForwardToPty(Vec<u8>),
-    /// Navigate to previous history entry.
-    HistoryPrev,
-    /// Navigate to next history entry.
-    HistoryNext,
-}
-
-/// The input editor buffer.
+/// A single-line editable text buffer.
+///
+/// The cursor is tracked as a byte offset into `buffer` and is always kept
+/// on a character boundary. All mutating methods leave the buffer in a
+/// valid UTF-8 state.
+#[derive(Default)]
 pub struct InputEditor {
-    /// The text being typed.
     buffer: String,
-    /// Cursor position (byte offset in buffer).
+    /// Cursor position as a byte offset into `buffer`.
     cursor: usize,
-    /// Prompt context — current working directory.
-    cwd: String,
-    /// Prompt context — git branch (if any).
-    git_branch: Option<String>,
-    /// Is raw mode active? (vim, ssh, fzf, etc.)
-    raw_mode: bool,
 }
 
 impl InputEditor {
     pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-            cursor: 0,
-            cwd: String::from("~"),
-            git_branch: None,
-            raw_mode: false,
-        }
+        Self::default()
     }
 
-    /// Get the current buffer contents.
     pub fn buffer(&self) -> &str {
         &self.buffer
     }
 
-    /// Get the cursor position.
-    pub fn cursor(&self) -> usize {
-        self.cursor
+    /// Cursor position as a displayed column (character count before the cursor).
+    /// Wide-character support (CJK) will land with text shaping (#20).
+    pub fn cursor_col(&self) -> usize {
+        self.buffer[..self.cursor].chars().count()
     }
 
-    /// Get the current working directory.
-    pub fn cwd(&self) -> &str {
-        &self.cwd
+    /// Insert text at the cursor position.
+    pub fn insert_str(&mut self, text: &str) {
+        self.buffer.insert_str(self.cursor, text);
+        self.cursor += text.len();
     }
 
-    /// Get the git branch, if any.
-    pub fn git_branch(&self) -> Option<&str> {
-        self.git_branch.as_deref()
+    /// Delete the character before the cursor.
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let prev = self.prev_char_boundary();
+        self.buffer.replace_range(prev..self.cursor, "");
+        self.cursor = prev;
     }
 
-    /// Set raw mode (bypass editor, forward keys to PTY).
-    pub fn set_raw_mode(&mut self, raw: bool) {
-        self.raw_mode = raw;
+    /// Delete the character at the cursor.
+    pub fn delete_forward(&mut self) {
+        if self.cursor >= self.buffer.len() {
+            return;
+        }
+        let next = self.next_char_boundary();
+        self.buffer.replace_range(self.cursor..next, "");
     }
 
-    /// Is the editor in raw mode?
-    pub fn is_raw_mode(&self) -> bool {
-        self.raw_mode
+    pub fn move_left(&mut self) {
+        self.cursor = self.prev_char_boundary();
     }
 
-    /// Update the prompt context.
-    pub fn set_cwd(&mut self, cwd: String) {
-        self.cwd = cwd;
+    pub fn move_right(&mut self) {
+        self.cursor = self.next_char_boundary();
     }
 
-    /// Update the git branch.
-    pub fn set_git_branch(&mut self, branch: Option<String>) {
-        self.git_branch = branch;
+    pub fn home(&mut self) {
+        self.cursor = 0;
     }
 
-    /// Set the buffer contents (for history navigation).
-    pub fn set_buffer(&mut self, text: String) {
-        self.cursor = text.len();
-        self.buffer = text;
+    pub fn end(&mut self) {
+        self.cursor = self.buffer.len();
     }
 
-    // TODO: Phase 1, Step 6
-    // - handle_key() method that routes key events to actions
-    // - Insert character at cursor
-    // - Backspace, Delete
-    // - Cursor movement (left, right, home, end)
-    // - Enter → SendCommand
-    // - Shift+Enter → insert newline
-    // - Up/Down → HistoryPrev/HistoryNext
-    // - Ctrl+C → ForwardToPty
-    // - Raw mode → ForwardToPty for everything
+    /// Clear the buffer without returning its contents. Used by Ctrl+C.
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.cursor = 0;
+    }
+
+    /// Extract the buffer and reset the editor. The returned string is the
+    /// composed command — the caller forwards it to the PTY with a trailing `\r`.
+    pub fn take_line(&mut self) -> String {
+        self.cursor = 0;
+        std::mem::take(&mut self.buffer)
+    }
+
+    fn prev_char_boundary(&self) -> usize {
+        self.buffer[..self.cursor]
+            .char_indices()
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    }
+
+    fn next_char_boundary(&self) -> usize {
+        self.buffer[self.cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| self.cursor + i)
+            .unwrap_or(self.buffer.len())
+    }
 }

@@ -23,6 +23,7 @@ alacritty_terminal = "0.26"
 
 # PTY
 portable-pty = "0.9"
+libc = "0.2"
 
 # Utilities
 bytemuck = { version = "1", features = ["derive"] }

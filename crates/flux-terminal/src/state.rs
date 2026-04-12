@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config as TermConfig;
-use alacritty_terminal::term::Term;
+use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
 use flux_types::{CellData, CellFlags, Color, RenderGrid};
 
@@ -173,6 +173,14 @@ impl TerminalState {
         }
 
         grid
+    }
+
+    /// True when the program on the other end of the PTY is using the
+    /// alternate screen buffer — vim, less, man, htop, tmux all set this
+    /// bit. It's the single most reliable signal that the user is in a
+    /// full-screen program that owns the keyboard.
+    pub fn is_alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// Resize the terminal grid.

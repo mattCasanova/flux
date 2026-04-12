@@ -11,3 +11,6 @@ alacritty_terminal = { workspace = true }
 portable-pty = { workspace = true }
 log = { workspace = true }
 anyhow = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

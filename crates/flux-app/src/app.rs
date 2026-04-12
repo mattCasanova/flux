@@ -7,11 +7,16 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
+use flux_input::InputEditor;
 use flux_terminal::pty::{PtyEvent, PtyManager};
 use flux_terminal::state::{TermEvent, TerminalState};
 use flux_types::Color;
 
 use crate::config::FluxConfig;
+
+/// Rows reserved below the output grid for Flux chrome:
+/// one divider row plus one input editor row.
+const INPUT_CHROME_ROWS: usize = 2;
 
 /// Application state — owns the window, renderer, PTY, and terminal state.
 pub struct App {
@@ -21,6 +26,11 @@ pub struct App {
     renderer: Option<flux_renderer::Renderer>,
     pty: Option<PtyManager>,
     terminal: Option<TerminalState>,
+    input: InputEditor,
+    /// True when a full-screen program (vim, less, fzf) owns the keyboard.
+    /// When set, keystrokes route directly to the PTY and Flux's input
+    /// chrome collapses to zero.
+    raw_mode: bool,
 }
 
 impl App {
@@ -32,6 +42,8 @@ impl App {
             renderer: None,
             pty: None,
             terminal: None,
+            input: InputEditor::new(),
+            raw_mode: false,
         }
     }
 }
@@ -110,14 +122,16 @@ impl App {
         let pad_y = self.config.window.padding_vertical * scale_factor;
         renderer.set_padding(pad_x, pad_y);
 
-        // Calculate grid dimensions from window size, padding, and cell metrics
+        // Calculate grid dimensions from window size, padding, and cell metrics.
+        // Reserve `INPUT_CHROME_ROWS` rows at the bottom for the divider + input editor.
         let metrics = renderer.cell_metrics();
         let inner_size = window.inner_size();
         let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
         let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
         let cols = (usable_w / metrics.width) as usize;
-        let rows = (usable_h / metrics.height) as usize;
-        log::info!("Grid: {}x{} (padding {}x{})", cols, rows, pad_x, pad_y);
+        let total_rows = (usable_h / metrics.height) as usize;
+        let rows = total_rows.saturating_sub(INPUT_CHROME_ROWS);
+        log::info!("Grid: {}x{} (padding {}x{}, chrome {} rows)", cols, rows, pad_x, pad_y, INPUT_CHROME_ROWS);
 
         // Create terminal state
         let terminal = TerminalState::new(cols.max(1), rows.max(1));
@@ -139,8 +153,10 @@ impl App {
         self.renderer = Some(renderer);
         self.terminal = Some(terminal);
         self.pty = Some(pty);
-
         self.window = Some(window);
+
+        self.update_display();
+        self.update_input_display();
         self.request_redraw();
 
         Ok(())
@@ -158,7 +174,7 @@ impl App {
             &self.config.font.family,
             font_size_px,
             self.config.font.line_height,
-            self.is_bold(),
+            self.default_glyph_style(),
         )?;
 
         if let Some(bg) = Color::from_hex(&self.config.theme.background) {
@@ -168,8 +184,12 @@ impl App {
         Ok(renderer)
     }
 
-    fn is_bold(&self) -> bool {
-        self.config.font.weight.to_lowercase() == "bold"
+    /// Default glyph style applied to cells with no BOLD/ITALIC flag —
+    /// read from `[font] weight` and `[font] style` in the config file.
+    fn default_glyph_style(&self) -> flux_renderer::GlyphStyle {
+        let bold = self.config.font.weight.eq_ignore_ascii_case("bold");
+        let italic = self.config.font.style.eq_ignore_ascii_case("italic");
+        flux_renderer::GlyphStyle::from_flags(bold, italic)
     }
 
     /// Process pending PTY output through alacritty_terminal.
@@ -211,8 +231,86 @@ impl App {
                 }
             }
 
+            // Raw-mode state can change on any PTY output (vim enters alt
+            // screen on launch, fzf flips termios, etc.). Re-check before
+            // rendering the next frame.
+            self.sync_raw_mode();
             self.update_display();
         }
+    }
+
+    /// Detect whether a full-screen program is on the other end of the PTY
+    /// and, if the state just changed, resize the grid and toggle chrome.
+    ///
+    /// Uses `TermMode::ALT_SCREEN` as the sole signal — vim, less, man, htop,
+    /// tmux, fzf (default) and top all set the alt-screen bit. We deliberately
+    /// do NOT check termios here: every interactive shell (zsh zle, bash
+    /// readline, fish) keeps the PTY in termios-raw mode whenever it's ready
+    /// for input, so `tcgetattr` is a false-positive trap — it fires as soon
+    /// as the shell prints its first prompt. Password prompts and other
+    /// termios-only raw-mode programs that skip alt-screen are a follow-up
+    /// (tracked separately).
+    fn sync_raw_mode(&mut self) {
+        let Some(terminal) = &self.terminal else { return };
+        let raw = terminal.is_alt_screen();
+        if raw == self.raw_mode {
+            return;
+        }
+        self.raw_mode = raw;
+        log::info!("Raw mode: {}", raw);
+
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_bottom_anchor(!raw);
+            renderer.set_show_shell_cursor(raw);
+        }
+
+        // Recompute the grid dimensions so alt-screen programs get every
+        // row, and restore the 2-row chrome when they exit.
+        self.apply_window_layout();
+
+        if raw {
+            if let Some(renderer) = &mut self.renderer {
+                renderer.hide_input_line();
+            }
+        } else {
+            self.update_input_display();
+        }
+    }
+
+    /// Recompute the grid dimensions from the current window size, accounting
+    /// for padding and whether Flux chrome is currently reserving rows. Called
+    /// on startup, window resize, scale change, and raw-mode transitions.
+    fn apply_window_layout(&mut self) {
+        let Some(window) = &self.window else { return };
+        let Some(renderer) = &mut self.renderer else { return };
+
+        let inner_size = window.inner_size();
+        let metrics = renderer.cell_metrics();
+        let pad_x = self.padding_x();
+        let pad_y = self.padding_y();
+        let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
+        let cols = (usable_w / metrics.width) as usize;
+        let total_rows = (usable_h / metrics.height) as usize;
+        let chrome_rows = if self.raw_mode { 0 } else { INPUT_CHROME_ROWS };
+        let rows = total_rows.saturating_sub(chrome_rows).max(1);
+
+        if let Some(terminal) = &mut self.terminal {
+            terminal.resize(cols.max(1), rows);
+        }
+        if let Some(pty) = &mut self.pty {
+            let _ = pty.resize(cols.max(1) as u16, rows as u16);
+        }
+    }
+
+    fn padding_x(&self) -> f32 {
+        let scale_factor = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+        self.config.window.padding_horizontal * scale_factor
+    }
+
+    fn padding_y(&self) -> f32 {
+        let scale_factor = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+        self.config.window.padding_vertical * scale_factor
     }
 
     /// Render the terminal grid.
@@ -228,43 +326,145 @@ impl App {
         renderer.set_grid(&grid);
     }
 
+    /// Push the current input editor state to the renderer.
+    fn update_input_display(&mut self) {
+        let Some(renderer) = &mut self.renderer else { return };
+        renderer.set_input_line(self.input.buffer(), self.input.cursor_col());
+    }
+
     fn handle_keyboard(&mut self, event: winit::event::KeyEvent) {
         use winit::event::ElementState;
-        use winit::keyboard::{Key, NamedKey};
-        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
         if event.state != ElementState::Pressed {
             return;
         }
 
-        let Some(pty) = &mut self.pty else { return };
+        if self.raw_mode {
+            self.handle_keyboard_raw(event);
+            return;
+        }
 
-        // Special keys that map to escape sequences
-        let bytes: Option<Vec<u8>> = match &event.logical_key {
-            Key::Named(NamedKey::Enter) => Some(b"\r".to_vec()),
-            Key::Named(NamedKey::Backspace) => Some(b"\x7f".to_vec()),
-            Key::Named(NamedKey::ArrowUp) => Some(b"\x1b[A".to_vec()),
-            Key::Named(NamedKey::ArrowDown) => Some(b"\x1b[B".to_vec()),
-            Key::Named(NamedKey::ArrowRight) => Some(b"\x1b[C".to_vec()),
-            Key::Named(NamedKey::ArrowLeft) => Some(b"\x1b[D".to_vec()),
-            Key::Named(NamedKey::Home) => Some(b"\x1b[H".to_vec()),
-            Key::Named(NamedKey::End) => Some(b"\x1b[F".to_vec()),
-            Key::Named(NamedKey::PageUp) => Some(b"\x1b[5~".to_vec()),
-            Key::Named(NamedKey::PageDown) => Some(b"\x1b[6~".to_vec()),
-            Key::Named(NamedKey::Delete) => Some(b"\x1b[3~".to_vec()),
-            Key::Named(NamedKey::Tab) => Some(b"\t".to_vec()),
-            Key::Named(NamedKey::Escape) => Some(b"\x1b".to_vec()),
+        self.handle_keyboard_cooked(event);
+    }
+
+    /// Cooked-mode key handling — keystrokes go through the Flux input editor,
+    /// Enter submits the composed line, Ctrl+<letter> bypasses the editor.
+    fn handle_keyboard_cooked(&mut self, event: winit::event::KeyEvent) {
+        use winit::keyboard::{Key, NamedKey};
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+
+        match &event.logical_key {
+            // Enter submits the composed line to the PTY (plus \r).
+            Key::Named(NamedKey::Enter) => {
+                let line = self.input.take_line();
+                if let Some(pty) = &mut self.pty {
+                    let _ = pty.write(line.as_bytes());
+                    let _ = pty.write(b"\r");
+                }
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.input.backspace();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::Delete) => {
+                self.input.delete_forward();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.input.move_left();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.input.move_right();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::Home) => {
+                self.input.home();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::End) => {
+                self.input.end();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            // Arrow up/down are reserved for history (#21) — swallow for now so
+            // they don't bleed into the PTY as cursor movements.
+            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown) => return,
+            _ => {}
+        }
+
+        // Everything else: text input or Ctrl+<letter>. `text_with_all_modifiers`
+        // folds Ctrl effects into the string (Ctrl+C → \x03, Ctrl+D → \x04, etc.),
+        // which is the terminal-correct interpretation. Single-byte control
+        // characters bypass the editor and go straight to the PTY; anything else
+        // is insertable text.
+        let Some(text) = event.text_with_all_modifiers() else { return };
+        if text.is_empty() {
+            return;
+        }
+
+        let is_control = text.len() == 1 && (text.as_bytes()[0] < 0x20 || text.as_bytes()[0] == 0x7f);
+        if is_control {
+            // Ctrl+C clears the editor buffer so the user starts fresh after the interrupt.
+            if text.as_bytes()[0] == 0x03 {
+                self.input.clear();
+                self.update_input_display();
+            }
+            if let Some(pty) = &mut self.pty {
+                let _ = pty.write(text.as_bytes());
+            }
+        } else {
+            self.input.insert_str(text);
+            self.update_input_display();
+        }
+
+        self.request_redraw();
+    }
+
+    /// Raw-mode key handling — the PTY owns the keyboard. Forward named keys
+    /// as the standard xterm escape sequences and everything else via
+    /// `text_with_all_modifiers` so Ctrl combos land correctly.
+    fn handle_keyboard_raw(&mut self, event: winit::event::KeyEvent) {
+        use winit::keyboard::{Key, NamedKey};
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+
+        let bytes: Option<&[u8]> = match &event.logical_key {
+            Key::Named(NamedKey::Enter) => Some(b"\r"),
+            Key::Named(NamedKey::Backspace) => Some(b"\x7f"),
+            Key::Named(NamedKey::Tab) => Some(b"\t"),
+            Key::Named(NamedKey::Escape) => Some(b"\x1b"),
+            Key::Named(NamedKey::ArrowUp) => Some(b"\x1b[A"),
+            Key::Named(NamedKey::ArrowDown) => Some(b"\x1b[B"),
+            Key::Named(NamedKey::ArrowRight) => Some(b"\x1b[C"),
+            Key::Named(NamedKey::ArrowLeft) => Some(b"\x1b[D"),
+            Key::Named(NamedKey::Home) => Some(b"\x1b[H"),
+            Key::Named(NamedKey::End) => Some(b"\x1b[F"),
+            Key::Named(NamedKey::PageUp) => Some(b"\x1b[5~"),
+            Key::Named(NamedKey::PageDown) => Some(b"\x1b[6~"),
+            Key::Named(NamedKey::Delete) => Some(b"\x1b[3~"),
             _ => None,
         };
 
         if let Some(bytes) = bytes {
-            let _ = pty.write(&bytes);
-        } else {
-            // Regular text input — use text_with_all_modifiers() which includes
-            // Ctrl effects (Ctrl+C -> \x03, Ctrl+D -> \x04, etc.).
-            // text_with_all_modifiers is the right field for terminals; the plain
-            // `event.text` is for text editors and excludes Ctrl effects.
-            if let Some(text) = event.text_with_all_modifiers() {
+            if let Some(pty) = &mut self.pty {
+                let _ = pty.write(bytes);
+            }
+        } else if let Some(text) = event.text_with_all_modifiers() {
+            if let Some(pty) = &mut self.pty {
                 let _ = pty.write(text.as_bytes());
             }
         }
@@ -276,33 +476,16 @@ impl App {
         // Reconfigure surface + resize grid + render — all in the same event.
         // Presenting a frame before returning from the resize handler prevents
         // the compositor from stretching a stale frame.
-
-        // 1. Resize surface + get metrics
-        let renderer = self.renderer.as_mut().expect("renderer not initialized");
-        renderer.resize(width, height);
-        let cell_w = renderer.cell_metrics().width;
-        let cell_h = renderer.cell_metrics().height;
-
-        // 2. Resize terminal grid + PTY (account for padding)
-        let scale_factor = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
-        let pad_x = self.config.window.padding_horizontal * scale_factor;
-        let pad_y = self.config.window.padding_vertical * scale_factor;
-        let usable_w = (width as f32 - pad_x * 2.0).max(0.0);
-        let usable_h = (height as f32 - pad_y * 2.0).max(0.0);
-        let cols = (usable_w / cell_w) as usize;
-        let rows = (usable_h / cell_h) as usize;
-
-        if cols > 0 && rows > 0 {
-            if let Some(terminal) = &mut self.terminal {
-                terminal.resize(cols, rows);
-            }
-            if let Some(pty) = &mut self.pty {
-                let _ = pty.resize(cols as u16, rows as u16);
-            }
+        if let Some(renderer) = &mut self.renderer {
+            renderer.resize(width, height);
         }
 
-        // 3. Update display + render immediately (no RedrawRequested wait)
+        self.apply_window_layout();
         self.update_display();
+        if !self.raw_mode {
+            self.update_input_display();
+        }
+
         let renderer = self.renderer.as_mut().expect("renderer not initialized");
         if let Err(e) = renderer.render() {
             log::error!("Resize render error: {}", e);
@@ -322,10 +505,9 @@ impl App {
         let font_size_px = self.config.font.size * scale_factor;
         let font_family = self.config.font.family.clone();
         let line_height = self.config.font.line_height;
-        let bold = self.is_bold();
 
         let Some(renderer) = &mut self.renderer else { return };
-        if let Err(e) = renderer.rebuild_font(&font_family, font_size_px, line_height, bold) {
+        if let Err(e) = renderer.rebuild_font(&font_family, font_size_px, line_height) {
             log::error!("Failed to rebuild font: {}", e);
             return;
         }
@@ -336,7 +518,11 @@ impl App {
             renderer.resize(size.width, size.height);
         }
 
+        self.apply_window_layout();
         self.update_display();
+        if !self.raw_mode {
+            self.update_input_display();
+        }
         self.request_redraw();
     }
 
