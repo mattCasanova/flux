@@ -25,6 +25,14 @@ const ATLAS_SIZE: u32 = 1024;
 const ASCII_COUNT: usize = 128;
 const ASCII_RANGE: std::ops::Range<u32> = 32..127;
 
+/// Defensive fallback for cell width when font shaping fails — rough average
+/// ratio of glyph advance to em-size for common monospace fonts.
+const FALLBACK_CELL_WIDTH_RATIO: f32 = 0.6;
+
+/// Defensive fallback for baseline position when font shaping fails — typical
+/// baseline sits roughly 80% of the way down the line box for Latin fonts.
+const FALLBACK_BASELINE_RATIO: f32 = 0.8;
+
 /// One of the four glyph styles we cache independently. Keyed as a
 /// `usize` so it can index directly into the atlas' per-style slot arrays.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -256,8 +264,8 @@ impl GlyphAtlas {
         buffer.set_text(font_system, "M", &attrs, cosmic_text::Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
 
-        let mut cell_width = metrics.font_size * 0.6; // fallback
-        let mut baseline_offset = metrics.line_height * 0.8; // fallback
+        let mut cell_width = metrics.font_size * FALLBACK_CELL_WIDTH_RATIO;
+        let mut baseline_offset = metrics.line_height * FALLBACK_BASELINE_RATIO;
 
         if let Some(run) = buffer.layout_runs().next() {
             if let Some(glyph) = run.glyphs.first() {
