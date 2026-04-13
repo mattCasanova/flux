@@ -34,6 +34,7 @@ anyhow = "1"
 dirs = "6"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
+arboard = "3"
 
 # Workspace crates
 flux-types = { path = "crates/flux-types" }

@@ -183,6 +183,14 @@ impl TerminalState {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// True when the child program has enabled bracketed paste mode — the
+    /// terminal should wrap pasted text in `\x1b[200~` / `\x1b[201~` so the
+    /// program can distinguish it from typed input. Most shells and vim
+    /// enable this by default.
+    pub fn is_bracketed_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     /// Resize the terminal grid.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.cols = cols;

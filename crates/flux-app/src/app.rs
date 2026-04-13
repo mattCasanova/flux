@@ -7,6 +7,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
+use arboard::Clipboard;
+use winit::keyboard::ModifiersState;
+
 use flux_input::InputEditor;
 use flux_terminal::pty::{PtyEvent, PtyManager};
 use flux_terminal::state::{TermEvent, TerminalState};
@@ -31,6 +34,13 @@ pub struct App {
     /// When set, keystrokes route directly to the PTY and Flux's input
     /// chrome collapses to zero.
     raw_mode: bool,
+    /// Current keyboard modifier state, tracked via `ModifiersChanged` events.
+    /// Needed for clipboard shortcuts (Cmd+V / Ctrl+Shift+V) since winit's
+    /// `KeyEvent` doesn't carry modifier state directly.
+    modifiers: ModifiersState,
+    /// System clipboard handle. Lazily created so a clipboard init failure
+    /// doesn't take down the whole app on startup.
+    clipboard: Option<Clipboard>,
 }
 
 impl App {
@@ -44,6 +54,8 @@ impl App {
             terminal: None,
             input: InputEditor::new(),
             raw_mode: false,
+            modifiers: ModifiersState::empty(),
+            clipboard: None,
         }
     }
 }
@@ -89,6 +101,10 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 self.handle_keyboard(event);
+            }
+
+            WindowEvent::ModifiersChanged(new) => {
+                self.modifiers = new.state();
             }
 
             _ => {}
@@ -339,12 +355,95 @@ impl App {
             return;
         }
 
+        // Clipboard shortcuts run ahead of mode-specific handling so they
+        // work identically in cooked and raw mode. Cmd on macOS maps to
+        // super in winit; Ctrl+Shift is the cross-platform fallback.
+        if self.is_paste_shortcut(&event) {
+            self.handle_paste();
+            return;
+        }
+
         if self.raw_mode {
             self.handle_keyboard_raw(event);
             return;
         }
 
         self.handle_keyboard_cooked(event);
+    }
+
+    /// Detect the system paste chord — Cmd+V on macOS, Ctrl+Shift+V elsewhere.
+    fn is_paste_shortcut(&self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        let is_v = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v"))
+            || matches!(&event.logical_key, Key::Named(NamedKey::Paste));
+        if !is_v {
+            return false;
+        }
+        let m = self.modifiers;
+        if cfg!(target_os = "macos") {
+            m.super_key() && !m.control_key() && !m.alt_key()
+        } else {
+            m.control_key() && m.shift_key() && !m.alt_key() && !m.super_key()
+        }
+    }
+
+    /// Read the system clipboard and route the text into the editor (cooked
+    /// mode) or the PTY (raw mode). In raw mode we wrap the payload in the
+    /// bracketed-paste markers when the child program has enabled that mode,
+    /// so vim et al can distinguish a paste from typed input.
+    fn handle_paste(&mut self) {
+        let text = match self.clipboard_text() {
+            Some(t) if !t.is_empty() => t,
+            _ => return,
+        };
+
+        if self.raw_mode {
+            let bracketed = self
+                .terminal
+                .as_ref()
+                .map(|t| t.is_bracketed_paste())
+                .unwrap_or(false);
+            if let Some(pty) = &mut self.pty {
+                if bracketed {
+                    let _ = pty.write(b"\x1b[200~");
+                }
+                let _ = pty.write(text.as_bytes());
+                if bracketed {
+                    let _ = pty.write(b"\x1b[201~");
+                }
+            }
+        } else {
+            // In cooked mode we collapse newlines so multi-line pastes don't
+            // fire submissions through Enter handling. Proper multi-line
+            // editing lands with #22.
+            let sanitized: String = text
+                .chars()
+                .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+                .collect();
+            self.input.insert_str(&sanitized);
+            self.update_input_display();
+        }
+
+        self.request_redraw();
+    }
+
+    fn clipboard_text(&mut self) -> Option<String> {
+        if self.clipboard.is_none() {
+            match Clipboard::new() {
+                Ok(cb) => self.clipboard = Some(cb),
+                Err(e) => {
+                    log::error!("Clipboard init failed: {}", e);
+                    return None;
+                }
+            }
+        }
+        match self.clipboard.as_mut()?.get_text() {
+            Ok(text) => Some(text),
+            Err(e) => {
+                log::warn!("Clipboard read failed: {}", e);
+                None
+            }
+        }
     }
 
     /// Cooked-mode key handling — keystrokes go through the Flux input editor,
