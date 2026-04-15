@@ -28,10 +28,24 @@ pub(crate) fn color_matches(a: Color, b: Color) -> bool {
 }
 
 impl Renderer {
-    /// Rebuild the combined instance buffer from the persistent output and input vecs.
-    /// Output instances come first, input instances second. Grows the GPU buffer if needed.
+    /// Rebuild the combined instance buffer from the persistent
+    /// output / input / popup vecs.
+    ///
+    /// Paint order: **output → input → popup**. This is the draw
+    /// order inside a single `draw(0..4, 0..instance_count)` call,
+    /// which means later slices render on top of earlier ones.
+    /// Popups (autocomplete from F7, search overlay from F14) must
+    /// be visible over the input line and the terminal grid, so
+    /// they sit at the end. R4 wires the popup slice through the
+    /// buffer layout so F7/F14 only have to populate
+    /// `popup_instances` — no further plumbing required.
+    ///
+    /// Grows the GPU buffer if the combined size exceeds current
+    /// capacity.
     pub(crate) fn rebuild_combined_buffer(&mut self) {
-        let total = self.output_instances.len() + self.input_instances.len();
+        let total = self.output_instances.len()
+            + self.input_instances.len()
+            + self.popup_instances.len();
         if total == 0 {
             self.instance_count = 0;
             return;
@@ -44,20 +58,30 @@ impl Renderer {
             log::info!("Grew instance buffer to {} cells", self.instance_capacity);
         }
 
+        let mut offset: u64 = 0;
         if !self.output_instances.is_empty() {
             self.gpu.queue.write_buffer(
                 &self.instance_buffer,
-                0,
+                offset,
                 bytemuck::cast_slice(&self.output_instances),
             );
+            offset += (self.output_instances.len() * std::mem::size_of::<CellInstance>()) as u64;
         }
 
         if !self.input_instances.is_empty() {
-            let offset = (self.output_instances.len() * std::mem::size_of::<CellInstance>()) as u64;
             self.gpu.queue.write_buffer(
                 &self.instance_buffer,
                 offset,
                 bytemuck::cast_slice(&self.input_instances),
+            );
+            offset += (self.input_instances.len() * std::mem::size_of::<CellInstance>()) as u64;
+        }
+
+        if !self.popup_instances.is_empty() {
+            self.gpu.queue.write_buffer(
+                &self.instance_buffer,
+                offset,
+                bytemuck::cast_slice(&self.popup_instances),
             );
         }
 

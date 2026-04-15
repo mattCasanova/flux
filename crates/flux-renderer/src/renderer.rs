@@ -57,6 +57,11 @@ pub struct Renderer {
     pub(crate) output_instances: Vec<CellInstance>,
     /// Instances for the fixed input chrome — rebuilt on `set_input_line`.
     pub(crate) input_instances: Vec<CellInstance>,
+    /// Instances for popup overlays (F7 autocomplete, F14 search
+    /// overlay, future command palette, etc.). Paint order is
+    /// output → input → popup, so popups render on top of everything
+    /// else. Empty in R4 — no feature writes to it yet.
+    pub(crate) popup_instances: Vec<CellInstance>,
     /// Default glyph style applied to cells with no bold/italic flags.
     /// Driven by `[font] weight = "bold"` / `style = "italic"` in the config
     /// file, so users can set a baseline weight the whole terminal inherits.
@@ -125,6 +130,7 @@ impl Renderer {
             instance_count: 0,
             output_instances: Vec::with_capacity(INITIAL_MAX_CELLS),
             input_instances: Vec::with_capacity(64),
+            popup_instances: Vec::new(),
             padding_x: 0.0,
             padding_y: 0.0,
             bottom_anchor: true,
