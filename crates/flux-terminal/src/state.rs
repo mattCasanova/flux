@@ -12,6 +12,8 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
 use flux_types::{CellData, CellFlags, Color, RenderGrid};
 
+use crate::blocks::BlockCapture;
+
 /// Events that alacritty_terminal sends back (bell, title change, etc.)
 #[derive(Debug)]
 pub enum TermEvent {
@@ -81,6 +83,15 @@ impl Dimensions for TermDimensions {
 pub struct TerminalState {
     term: Term<EventProxy>,
     parser: vte::ansi::Processor,
+    /// Side-channel OSC interceptor. See `blocks.rs` for the full
+    /// rationale — in short, alacritty's ansi layer drops OSC 7 and
+    /// OSC 133 before they reach `Term`, so we run a second parser
+    /// over the same byte stream to catch them.
+    block_capture: BlockCapture,
+    /// Stock vte parser driving `block_capture`. Independent state
+    /// machine from `parser` — both see the exact same `&[u8]` but
+    /// neither affects the other.
+    block_parser: vte::Parser,
     event_rx: mpsc::Receiver<TermEvent>,
     cols: usize,
     rows: usize,
@@ -100,6 +111,8 @@ impl TerminalState {
         Self {
             term,
             parser,
+            block_capture: BlockCapture::new(),
+            block_parser: vte::Parser::new(),
             event_rx: rx,
             cols,
             rows,
@@ -107,8 +120,24 @@ impl TerminalState {
     }
 
     /// Feed raw PTY output bytes into the terminal parser.
+    ///
+    /// Two parsers run in parallel over the same byte slice:
+    /// - `self.parser.advance(&mut self.term, bytes)` is the main
+    ///   path — it drives alacritty's grid, cursor, and scrollback.
+    ///   Unchanged from before R3.
+    /// - `self.block_parser.advance(&mut self.block_capture, bytes)`
+    ///   is the side path — a stock `vte::Parser` with its own
+    ///   state machine, feeding a `Perform` impl that exists only
+    ///   to intercept OSC 7 (cwd) and OSC 133 (prompt/exit). R3
+    ///   lands this as a no-op foundation; F4/F8 add the real
+    ///   handling.
+    ///
+    /// The two parsers are independent — feeding bytes to one does
+    /// not affect the other's state. Running both is sub-microsecond
+    /// per KB (see module docs for the perf rationale).
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+        self.block_parser.advance(&mut self.block_capture, bytes);
     }
 
     /// Drain any events from alacritty_terminal (PtyWrite, Bell, Title).
@@ -283,5 +312,26 @@ impl TerminalState {
                 Color::from_rgb(gray, gray, gray)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R3 smoke test — prove that `process_bytes` feeds BOTH parsers
+    /// (main alacritty + side BlockCapture) without panicking, and
+    /// that constructing a TerminalState works with the side parser
+    /// wired in. No assertion on BlockCapture state — the side
+    /// parser is a no-op in R3; F4 adds a test that verifies OSC 7
+    /// actually updates `cwd`.
+    #[test]
+    fn block_capture_runs_alongside_main_parser() {
+        let mut state = TerminalState::new(80, 24);
+        state.process_bytes(b"hello world\n");
+        state.process_bytes(b"\x1b[31mred\x1b[0m\n");
+        // Feed an OSC 7 sequence — the side parser should accept it
+        // without panicking even though nothing reads the state yet.
+        state.process_bytes(b"\x1b]7;file://localhost/tmp\x07");
     }
 }

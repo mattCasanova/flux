@@ -4,6 +4,7 @@
 //! interface. No GPU code — produces [flux_types::RenderGrid] for the
 //! renderer to consume.
 
+mod blocks;
 pub mod pty;
 pub mod state;
 
