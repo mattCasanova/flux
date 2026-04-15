@@ -1,12 +1,20 @@
 //! Keyboard event routing.
 //!
-//! `handle_keyboard` is the top-level entry point: it filters out key
-//! releases, lets the clipboard shortcut short-circuit first (paste
-//! must work in both raw and cooked mode), then branches to either
-//! `handle_keyboard_raw` (PTY-first) or `handle_keyboard_cooked`
-//! (editor-first).
+//! `handle_keyboard` is the top-level entry point. Order of operations:
+//!
+//! 1. Drop key releases (only Pressed events do anything).
+//! 2. **Popup intercept** (R6 scaffold) — if an overlay like
+//!    autocomplete or search is active, give it first refusal on
+//!    the key. R6 only has `PopupState::Hidden` so this branch
+//!    currently does nothing; F7 and F14 add real arms. The match
+//!    is exhaustive with NO wildcard arm, so adding a new variant
+//!    is a compile error until its intercept is wired up.
+//! 3. Clipboard shortcut short-circuit — paste must work in both
+//!    raw and cooked mode, so it runs before the mode split.
+//! 4. Branch to `handle_keyboard_raw` (PTY-first) or
+//!    `handle_keyboard_cooked` (editor-first) based on `raw_mode`.
 
-use super::App;
+use super::{App, PopupState};
 
 impl App {
     pub(super) fn handle_keyboard(&mut self, event: winit::event::KeyEvent) {
@@ -14,6 +22,14 @@ impl App {
 
         if event.state != ElementState::Pressed {
             return;
+        }
+
+        // Popup intercept. Exhaustive match — NO wildcard arm. F7
+        // adds `PopupState::Autocomplete => { ... }`, F14 adds
+        // `PopupState::Search => { ... }`; each feature's arm is
+        // free to return early if it handled the event.
+        match &self.popup {
+            PopupState::Hidden => {}
         }
 
         // Clipboard shortcuts run ahead of mode-specific handling so they

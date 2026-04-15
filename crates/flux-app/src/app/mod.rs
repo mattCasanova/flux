@@ -11,6 +11,7 @@ mod display;
 mod initialize;
 mod keyboard;
 mod layout;
+mod popup;
 mod terminal_events;
 
 use std::sync::Arc;
@@ -27,6 +28,8 @@ use flux_terminal::pty::PtyManager;
 use flux_terminal::state::TerminalState;
 
 use crate::config::FluxConfig;
+
+pub(crate) use popup::PopupState;
 
 /// Rows reserved below the output grid for Flux chrome:
 /// one divider row plus one input editor row.
@@ -52,6 +55,10 @@ pub struct App {
     /// System clipboard handle. Lazily created so a clipboard init failure
     /// doesn't take down the whole app on startup.
     pub(crate) clipboard: Option<Clipboard>,
+    /// Active overlay, if any. R6 introduces the field with only the
+    /// `Hidden` variant; F7 / F14 add autocomplete and search intercepts
+    /// that read this to decide whether to swallow a keystroke.
+    pub(crate) popup: PopupState,
 }
 
 impl App {
@@ -67,6 +74,7 @@ impl App {
             raw_mode: false,
             modifiers: ModifiersState::empty(),
             clipboard: None,
+            popup: PopupState::Hidden,
         }
     }
 }
