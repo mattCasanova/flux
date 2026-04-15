@@ -17,6 +17,12 @@ impl Renderer {
     /// `baseline_offset` = distance from cell top to the glyph baseline.
     /// The glyph's `placement_top` is the distance from baseline to top of the bitmap,
     /// `placement_left` is the horizontal offset from the cell's origin.
+    //
+    // Nine arguments is over clippy's default cap but bundling them into a
+    // struct would just move the ceremony to the caller (set_grid /
+    // set_input_line each invoke this in a hot loop). The hot-path shape
+    // is the right tradeoff here.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_glyph(
         &mut self,
         character: char,

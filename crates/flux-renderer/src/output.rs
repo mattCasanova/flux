@@ -59,29 +59,29 @@ impl Renderer {
         // Draw the shell's cursor block first (so any underlying glyph paints on top).
         // Uses the full cell height so the cursor matches the line grid
         // uniformly regardless of which glyph sits under it.
-        if self.show_shell_cursor {
-            if let Some((col, row)) = grid.cursor {
-                let cursor_x = pad_x + col as f32 * cell_w;
-                let cursor_y = pad_y + row as f32 * cell_h + y_shift;
-                let cursor_color = Color::from_hex("#c0caf5").unwrap_or(Color::default());
-                instances.push(CellInstance {
-                    position: [cursor_x, cursor_y],
-                    size: [cell_w, cell_h],
-                    glyph_uv: [0.0, 0.0, 0.0, 0.0],
-                    fg_color: [
-                        cursor_color.r,
-                        cursor_color.g,
-                        cursor_color.b,
-                        cursor_color.a,
-                    ],
-                    bg_color: [
-                        cursor_color.r,
-                        cursor_color.g,
-                        cursor_color.b,
-                        cursor_color.a,
-                    ],
-                });
-            }
+        if self.show_shell_cursor
+            && let Some((col, row)) = grid.cursor
+        {
+            let cursor_x = pad_x + col as f32 * cell_w;
+            let cursor_y = pad_y + row as f32 * cell_h + y_shift;
+            let cursor_color = Color::from_hex("#c0caf5").unwrap_or_default();
+            instances.push(CellInstance {
+                position: [cursor_x, cursor_y],
+                size: [cell_w, cell_h],
+                glyph_uv: [0.0, 0.0, 0.0, 0.0],
+                fg_color: [
+                    cursor_color.r,
+                    cursor_color.g,
+                    cursor_color.b,
+                    cursor_color.a,
+                ],
+                bg_color: [
+                    cursor_color.r,
+                    cursor_color.g,
+                    cursor_color.b,
+                    cursor_color.a,
+                ],
+            });
         }
 
         let clear = self.effective_clear_color;
@@ -134,7 +134,7 @@ impl Renderer {
                 let (fg, bg) = if is_under_cursor {
                     let cursor_bg =
                         Color::from_hex("#24283b").unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
-                    let cursor_fg = Color::from_hex("#c0caf5").unwrap_or(Color::default());
+                    let cursor_fg = Color::from_hex("#c0caf5").unwrap_or_default();
                     (cursor_bg, cursor_fg)
                 } else {
                     (cell.fg, cell.bg)

@@ -67,16 +67,15 @@ impl Renderer {
         });
 
         // Draw the prompt prefix in a slightly different color from the text.
-        let prompt_color = Color::from_hex("#7aa2f7").unwrap_or(Color::default());
-        let fg_color = Color::from_hex("#c0caf5").unwrap_or(Color::default());
+        let prompt_color = Color::from_hex("#7aa2f7").unwrap_or_default();
+        let fg_color = Color::from_hex("#c0caf5").unwrap_or_default();
         let bg_color = Color::from_hex("#24283b").unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
-        let cursor_color = Color::from_hex("#c0caf5").unwrap_or(Color::default());
+        let cursor_color = Color::from_hex("#c0caf5").unwrap_or_default();
 
         let prefix = "❯ ";
         let prefix_len = prefix.chars().count();
         let style = self.default_style;
-        let mut col = 0;
-        for ch in prefix.chars() {
+        for (col, ch) in prefix.chars().enumerate() {
             let x = pad_x + col as f32 * cell_w;
             if ch != ' ' {
                 self.render_glyph(
@@ -90,7 +89,6 @@ impl Renderer {
                     &mut instances,
                 );
             }
-            col += 1;
         }
 
         // Cursor column in the full input row (after the prefix).
