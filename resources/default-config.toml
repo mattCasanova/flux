@@ -5,6 +5,12 @@
 #
 # All colors are hex RGB (e.g., "#7aa2f7").
 
+# Config schema version. Bumped when Flux grows a field that older
+# defaults can't auto-fill. If you're editing this by hand you almost
+# always want the current value — older values are migrated forward
+# automatically on load.
+version = 1
+
 [font]
 # Font family — must be installed on your system.
 # Common monospace fonts: "Menlo", "JetBrains Mono", "Fira Code",

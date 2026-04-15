@@ -14,8 +14,28 @@ use crate::platform;
 /// This is the single source of truth for all default values.
 const DEFAULT_CONFIG_TOML: &str = include_str!("../../../resources/default-config.toml");
 
+/// The config schema version the running binary understands.
+///
+/// Bumped any time `FluxConfig` grows a field that the old defaults
+/// can't reasonably auto-fill. F2 (Phase 1) introduces actual
+/// migration logic keyed off this number; R2 only lays the
+/// scaffolding so the field is parsed and a default exists for
+/// pre-versioned configs.
+pub const CURRENT_CONFIG_VERSION: u32 = 1;
+
+fn default_version() -> u32 {
+    // Pre-R2 configs have no `version` field. Treat them as v1 —
+    // they parsed fine against the v0.1 schema, so nothing has
+    // diverged yet.
+    CURRENT_CONFIG_VERSION
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct FluxConfig {
+    /// Config schema version. See `CURRENT_CONFIG_VERSION`.
+    #[serde(default = "default_version")]
+    #[allow(dead_code)] // consumed by F2 config migration (#54)
+    pub version: u32,
     pub font: FontConfig,
     pub window: WindowConfig,
     pub theme: ThemeConfig,
