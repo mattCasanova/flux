@@ -111,11 +111,28 @@ impl Autocomplete {
         let dirs_only = DIR_ONLY_COMMANDS.contains(&command);
         let partial = &buffer[token_start..cursor];
 
+        // Expand ~ to the user's home directory.
+        let expanded;
+        let partial = if partial.starts_with('~') {
+            if let Some(home) = dirs::home_dir() {
+                expanded = partial.replacen('~', &home.to_string_lossy(), 1);
+                &expanded
+            } else {
+                partial
+            }
+        } else {
+            partial
+        };
+
         // Resolve subdirectory paths: "src/lib" → list "cwd/src", prefix "lib"
         let (list_dir, prefix) = if let Some(last_slash) = partial.rfind('/') {
             let dir_part = &partial[..=last_slash];
             let file_part = &partial[last_slash + 1..];
-            let resolved = cwd.join(dir_part);
+            let resolved = if std::path::Path::new(dir_part).is_absolute() {
+                std::path::PathBuf::from(dir_part)
+            } else {
+                cwd.join(dir_part)
+            };
             if resolved.is_dir() {
                 (resolved, file_part.to_string())
             } else {

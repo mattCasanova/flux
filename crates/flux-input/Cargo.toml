@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 flux-types = { workspace = true }
+dirs = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
