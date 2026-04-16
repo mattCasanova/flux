@@ -13,7 +13,7 @@ use flux_terminal::pty::PtyManager;
 use flux_terminal::state::TerminalState;
 use flux_types::Color;
 
-use super::{App, INPUT_CHROME_ROWS};
+use super::{App, MIN_INPUT_BAR_ROWS};
 
 impl App {
     pub(super) fn initialize(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
@@ -34,21 +34,21 @@ impl App {
         renderer.set_padding(pad_x, pad_y);
 
         // Calculate grid dimensions from window size, padding, and cell metrics.
-        // Reserve `INPUT_CHROME_ROWS` rows at the bottom for the divider + input editor.
+        // Reserve `MIN_INPUT_BAR_ROWS` rows at the bottom for the divider + input editor.
         let metrics = renderer.cell_metrics();
         let inner_size = window.inner_size();
         let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
         let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
         let cols = (usable_w / metrics.width) as usize;
         let total_rows = (usable_h / metrics.height) as usize;
-        let rows = total_rows.saturating_sub(INPUT_CHROME_ROWS);
+        let rows = total_rows.saturating_sub(MIN_INPUT_BAR_ROWS);
         log::info!(
             "Grid: {}x{} (padding {}x{}, chrome {} rows)",
             cols,
             rows,
             pad_x,
             pad_y,
-            INPUT_CHROME_ROWS
+            MIN_INPUT_BAR_ROWS
         );
 
         // Create terminal state

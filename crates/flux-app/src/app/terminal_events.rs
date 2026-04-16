@@ -90,7 +90,7 @@ impl App {
 
         if raw {
             if let Some(renderer) = &mut self.renderer {
-                renderer.hide_input_line();
+                renderer.hide_input_bar();
             }
         } else {
             self.update_input_display();

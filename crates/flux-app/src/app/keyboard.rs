@@ -55,12 +55,16 @@ impl App {
         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
         match &event.logical_key {
-            // Enter submits the composed line to the PTY (plus \r).
+            // Shift+Enter inserts a newline; Enter submits the buffer.
             Key::Named(NamedKey::Enter) => {
-                let line = self.input.take_line();
-                if let Some(pty) = &mut self.pty {
-                    let _ = pty.write(line.as_bytes());
-                    let _ = pty.write(b"\r");
+                if self.modifiers.shift_key() {
+                    self.input.insert_newline();
+                } else {
+                    let line = self.input.take_line();
+                    if let Some(pty) = &mut self.pty {
+                        let _ = pty.write(line.as_bytes());
+                        let _ = pty.write(b"\r");
+                    }
                 }
                 self.update_input_display();
                 self.request_redraw();
@@ -103,13 +107,23 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::ArrowUp) => {
-                self.input.history_prev();
+                let on_first_line = self.input.cursor_line() == 0;
+                if self.input.line_count() == 1 || on_first_line {
+                    self.input.history_prev();
+                } else {
+                    self.input.move_up();
+                }
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::ArrowDown) => {
-                self.input.history_next();
+                let on_last_line = self.input.cursor_line() == self.input.line_count() - 1;
+                if self.input.line_count() == 1 || on_last_line {
+                    self.input.history_next();
+                } else {
+                    self.input.move_down();
+                }
                 self.update_input_display();
                 self.request_redraw();
                 return;

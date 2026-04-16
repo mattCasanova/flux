@@ -51,14 +51,9 @@ impl App {
                 }
             }
         } else {
-            // In cooked mode we collapse newlines so multi-line pastes don't
-            // fire submissions through Enter handling. Proper multi-line
-            // editing lands with #22.
-            let sanitized: String = text
-                .chars()
-                .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-                .collect();
-            self.input.insert_str(&sanitized);
+            // Multi-line paste: normalize \r\n to \n, strip trailing \r.
+            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            self.input.insert_str(&normalized);
             self.update_input_display();
         }
 

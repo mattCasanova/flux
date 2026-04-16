@@ -21,10 +21,20 @@ impl App {
         renderer.set_grid(&grid);
     }
 
-    /// Push the current input editor state to the renderer.
+    /// Push the current input editor state to the renderer. If the
+    /// input line count changed, recompute the layout so the PTY gets
+    /// the updated row count.
     pub(super) fn update_input_display(&mut self) {
+        let current_lines = self.input.line_count();
+        if current_lines != self.last_input_lines {
+            self.last_input_lines = current_lines;
+            self.apply_window_layout();
+            self.update_display();
+        }
+
         let Some(renderer) = &mut self.renderer else { return };
-        renderer.set_input_line(self.input.buffer(), self.input.cursor_col());
+        let cursor = (self.input.cursor_line(), self.input.cursor_col_in_line());
+        renderer.set_input_block(self.input.buffer(), cursor);
     }
 
     pub(super) fn handle_redraw(&mut self) {

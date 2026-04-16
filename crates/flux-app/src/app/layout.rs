@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use winit::window::Window;
 
-use super::{App, INPUT_CHROME_ROWS};
+use super::App;
 
 impl App {
     /// Recompute the grid dimensions from the current window size, accounting
@@ -26,7 +26,9 @@ impl App {
         let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
         let cols = (usable_w / metrics.width) as usize;
         let total_rows = (usable_h / metrics.height) as usize;
-        let chrome_rows = if self.raw_mode { 0 } else { INPUT_CHROME_ROWS };
+        // 1 divider row + N input lines (dynamic based on editor content).
+        let input_lines = self.input.line_count();
+        let chrome_rows = if self.raw_mode { 0 } else { 1 + input_lines };
         let rows = total_rows.saturating_sub(chrome_rows).max(1);
 
         if let Some(terminal) = &mut self.terminal {

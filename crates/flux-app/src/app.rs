@@ -31,9 +31,8 @@ use crate::config::FluxConfig;
 
 pub(crate) use popup::PopupState;
 
-/// Rows reserved below the output grid for Flux chrome:
-/// one divider row plus one input editor row.
-pub(crate) const INPUT_CHROME_ROWS: usize = 2;
+/// Minimum rows reserved for the input bar: one divider + one input line.
+pub(crate) const MIN_INPUT_BAR_ROWS: usize = 2;
 
 /// Application state — owns the window, renderer, PTY, and terminal state.
 pub struct App {
@@ -59,6 +58,9 @@ pub struct App {
     /// `Hidden` variant; F7 / F14 add autocomplete and search intercepts
     /// that read this to decide whether to swallow a keystroke.
     pub(crate) popup: PopupState,
+    /// Tracks the input bar's line count so we only recompute layout
+    /// when it changes (avoids unnecessary PTY resizes).
+    pub(crate) last_input_lines: usize,
 }
 
 impl App {
@@ -79,6 +81,7 @@ impl App {
             modifiers: ModifiersState::empty(),
             clipboard: None,
             popup: PopupState::Hidden,
+            last_input_lines: 1,
         }
     }
 }
