@@ -40,8 +40,7 @@ impl Shell for Fish {
     }
 
     fn integration_script(&self) -> &str {
-        // TODO: Load from shell/flux-integration.fish
-        ""
+        crate::integration::FISH_INTEGRATION
     }
 
     fn injection_method(&self) -> InjectionMethod {

@@ -14,6 +14,7 @@ mod zsh;
 mod bash;
 mod fish;
 mod history;
+pub mod integration;
 
 use std::path::{Path, PathBuf};
 

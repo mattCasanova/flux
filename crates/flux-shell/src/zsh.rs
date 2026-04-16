@@ -38,8 +38,7 @@ impl Shell for Zsh {
     }
 
     fn integration_script(&self) -> &str {
-        // TODO: Load from shell/flux-integration.zsh
-        ""
+        crate::integration::ZSH_INTEGRATION
     }
 
     fn injection_method(&self) -> InjectionMethod {

@@ -38,8 +38,7 @@ impl Shell for Bash {
     }
 
     fn integration_script(&self) -> &str {
-        // TODO: Load from shell/flux-integration.bash
-        ""
+        crate::integration::BASH_INTEGRATION
     }
 
     fn injection_method(&self) -> InjectionMethod {

@@ -60,12 +60,30 @@ impl App {
         let wake = Box::new(move || {
             let _ = proxy.send_event(());
         });
-        let pty = PtyManager::spawn(
+        let mut pty = PtyManager::spawn(
             shell.binary().to_str().unwrap_or("/bin/zsh"),
             cols.max(1) as u16,
             rows.max(1) as u16,
             wake,
         )?;
+
+        // Auto-inject shell integration: write the script to a known
+        // path and source it in the new shell. This installs OSC 7
+        // (cwd) and OSC 133 (prompt/command lifecycle) hooks.
+        let integration = shell.integration_script();
+        if !integration.is_empty() {
+            let script_dir = crate::platform::config_dir().join("shell");
+            let script_name = format!("flux-integration.{}", shell.name());
+            let script_path = script_dir.join(&script_name);
+            if let Err(e) = std::fs::write(&script_path, integration) {
+                log::warn!("Failed to write integration script: {}", e);
+            } else {
+                // Source the script silently in the new shell.
+                let source_cmd = format!("source '{}'\n", script_path.display());
+                let _ = pty.write(source_cmd.as_bytes());
+                log::info!("Shell integration installed: {}", script_path.display());
+            }
+        }
 
         log::info!("Renderer + PTY initialized");
         self.renderer = Some(renderer);
