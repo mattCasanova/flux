@@ -112,7 +112,15 @@ impl Autocomplete {
         let partial = &buffer[token_start..cursor];
 
         // Expand ~ and $ENV_VARS before resolving the path.
-        let expanded = expand_shell_vars(partial);
+        let mut expanded = expand_shell_vars(partial);
+        // If expansion produced a directory path without a trailing /,
+        // append it so the path splitter doesn't try to match the last
+        // component as a filename prefix. E.g., $HOME → /Users/matt
+        // should become /Users/matt/ so we list its contents, not
+        // treat "matt" as a prefix filter on /Users/.
+        if !expanded.ends_with('/') && std::path::Path::new(&expanded).is_dir() {
+            expanded.push('/');
+        }
         let partial = &expanded;
 
         // Resolve subdirectory paths: "src/lib" → list "cwd/src", prefix "lib"
