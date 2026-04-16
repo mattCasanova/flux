@@ -1,7 +1,7 @@
 //! Terminal state, PTY management, and ANSI parsing for Flux.
 //!
 //! This crate wraps alacritty_terminal and portable-pty behind a clean
-//! interface. No GPU code — produces [flux_types::RenderGrid] for the
+//! interface. No GPU code — produces [flux_types::TerminalGrid] for the
 //! renderer to consume.
 
 mod blocks;

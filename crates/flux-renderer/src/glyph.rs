@@ -6,7 +6,7 @@
 //! appends to the caller's `&mut Vec<CellInstance>`.
 
 use crate::atlas::GlyphStyle;
-use crate::cell_renderer::CellInstance;
+use crate::core::CellInstance;
 use crate::renderer::Renderer;
 use flux_types::Color;
 

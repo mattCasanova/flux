@@ -101,7 +101,7 @@ impl Default for CellData {
 }
 
 /// A grid of cells — the renderer's input.
-pub struct RenderGrid {
+pub struct TerminalGrid {
     pub cells: Vec<CellData>,
     pub cols: usize,
     pub rows: usize,
@@ -109,7 +109,7 @@ pub struct RenderGrid {
     pub cursor: Option<(usize, usize)>,
 }
 
-impl RenderGrid {
+impl TerminalGrid {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
             cells: vec![CellData::default(); cols * rows],

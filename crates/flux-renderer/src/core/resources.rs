@@ -7,8 +7,8 @@
 
 use wgpu::util::DeviceExt;
 
-use crate::cell_renderer::{CellInstance, QUAD_VERTICES};
-use crate::pipeline::Uniforms;
+use super::pipeline::Uniforms;
+use super::types::{CellInstance, QUAD_VERTICES};
 
 pub(crate) fn create_quad_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

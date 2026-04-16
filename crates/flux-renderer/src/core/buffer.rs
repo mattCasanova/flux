@@ -8,7 +8,7 @@
 //! The `rebuild_combined_buffer` method lives here as an `impl Renderer`
 //! block — same pattern every sibling module uses (see Phase -1 D1).
 
-use crate::cell_renderer::CellInstance;
+use super::types::CellInstance;
 use crate::renderer::Renderer;
 use flux_types::Color;
 
@@ -54,7 +54,7 @@ impl Renderer {
         if total > self.instance_capacity {
             self.instance_capacity = total * 2;
             self.instance_buffer =
-                crate::gpu_resources::create_instance_buffer(&self.gpu.device, self.instance_capacity);
+                super::resources::create_instance_buffer(&self.gpu.device, self.instance_capacity);
             log::info!("Grew instance buffer to {} cells", self.instance_capacity);
         }
 

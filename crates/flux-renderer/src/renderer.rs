@@ -16,13 +16,11 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::atlas::{self, GlyphStyle};
-use crate::buffer::INITIAL_MAX_CELLS;
-use crate::cell_renderer::CellInstance;
-use crate::gpu;
-use crate::gpu_resources::{
-    create_instance_buffer, create_quad_buffer, create_sampler, create_uniform_buffer,
+use crate::core::{
+    create_bind_group, create_bind_group_layout, create_cell_pipeline, create_instance_buffer,
+    create_quad_buffer, create_sampler, create_uniform_buffer, CellInstance, GpuContext,
+    Uniforms, INITIAL_MAX_CELLS,
 };
-use crate::pipeline::{self, Uniforms};
 use flux_types::Color;
 
 /// Cell dimensions in pixels.
@@ -34,7 +32,7 @@ pub struct CellMetrics {
 
 /// The renderer — owns all GPU state and renders frames.
 pub struct Renderer {
-    pub(crate) gpu: gpu::GpuContext,
+    pub(crate) gpu: GpuContext,
     pub(crate) atlas: atlas::GlyphAtlas,
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
@@ -89,7 +87,7 @@ impl Renderer {
         line_height: f32,
         default_style: GlyphStyle,
     ) -> Result<Self> {
-        let gpu = gpu::GpuContext::new(window)?;
+        let gpu = GpuContext::new(window)?;
         let atlas = atlas::GlyphAtlas::new(
             &gpu.device,
             &gpu.queue,
@@ -100,10 +98,10 @@ impl Renderer {
         let quad_vertex_buffer = create_quad_buffer(&gpu.device);
         let uniform_buffer = create_uniform_buffer(&gpu.device, &gpu.surface_config);
         let sampler = create_sampler(&gpu.device);
-        let bind_group_layout = pipeline::create_bind_group_layout(&gpu.device);
+        let bind_group_layout = create_bind_group_layout(&gpu.device);
         let pipeline =
-            pipeline::create_cell_pipeline(&gpu.device, gpu.format(), &bind_group_layout);
-        let bind_group = pipeline::create_bind_group(
+            create_cell_pipeline(&gpu.device, gpu.format(), &bind_group_layout);
+        let bind_group = create_bind_group(
             &gpu.device,
             &bind_group_layout,
             &uniform_buffer,
@@ -181,7 +179,7 @@ impl Renderer {
             font_size,
             line_height,
         )?;
-        self.bind_group = pipeline::create_bind_group(
+        self.bind_group = create_bind_group(
             &self.gpu.device,
             &self.bind_group_layout,
             &self.uniform_buffer,

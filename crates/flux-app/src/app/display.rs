@@ -17,7 +17,7 @@ impl App {
         let bg = Color::from_hex(&self.config.theme.background)
             .unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
 
-        let grid = terminal.render_grid(fg, bg);
+        let grid = terminal.grid_snapshot(fg, bg);
         renderer.set_grid(&grid);
     }
 

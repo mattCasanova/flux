@@ -18,9 +18,9 @@ pub(crate) struct QuadVertex {
 /// Triangle strip quad: 4 vertices.
 ///
 ///   2---3       Winding order for TriangleStrip:
-///   |  /|       Triangle 1: 0 → 1 → 2
-///   | / |       Triangle 2: 1 → 3 → 2 (implicit from strip)
-///   |/  |
+///   |\  |       Triangle 1: 0 → 1 → 2
+///   | \ |       Triangle 2: 1 → 3 → 2 (implicit from strip)
+///   |  \|
 ///   0---1
 pub(crate) const QUAD_VERTICES: &[QuadVertex] = &[
     QuadVertex { position: [0.0, 1.0], uv: [0.0, 1.0] }, // bottom-left

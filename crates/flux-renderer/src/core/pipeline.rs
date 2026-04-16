@@ -1,6 +1,6 @@
 //! Render pipeline creation — shaders, bind groups, vertex layouts.
 
-use crate::cell_renderer::{CellInstance, QuadVertex};
+use super::types::{CellInstance, QuadVertex};
 use bytemuck::{Pod, Zeroable};
 
 /// Projection matrix uniform.
@@ -31,7 +31,7 @@ pub(crate) fn create_cell_pipeline(
     surface_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
-    let shader_source = include_str!("../../../resources/shaders/cell.wgsl");
+    let shader_source = include_str!("../../../../resources/shaders/cell.wgsl");
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Cell Shader"),
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),

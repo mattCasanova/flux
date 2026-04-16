@@ -1,13 +1,10 @@
-//! Input editor chrome — the fixed prompt line at the bottom of the
-//! window. Owns `set_input_line` and `hide_input_line`.
+//! Input bar — the fixed prompt line at the bottom of the window.
 //!
-//! The input chrome is Flux-owned UI: divider row, prompt prefix,
-//! buffer text, block cursor. It sits at a fixed Y (one cell above
-//! the bottom padding) and is re-rendered on every keystroke. It is
-//! NOT part of the shell grid — the shell's cursor row is drawn
-//! separately by `set_grid`.
+//! Renders the divider row, `❯ ` prompt prefix, editor buffer text,
+//! and block cursor. Sits at a fixed Y one cell above the bottom
+//! padding and is rebuilt on every keystroke.
 
-use crate::cell_renderer::CellInstance;
+use crate::core::CellInstance;
 use crate::renderer::Renderer;
 use flux_types::Color;
 

@@ -1,12 +1,11 @@
 //! Output grid rendering — `set_grid`.
 //!
-//! Takes a `flux_types::RenderGrid` and rebuilds `output_instances`
+//! Takes a `flux_types::TerminalGrid` and rebuilds `output_instances`
 //! with per-cell backgrounds, glyphs, and the optional shell cursor
 //! block. Handles bottom-anchor y-shift in cooked mode.
 
 use crate::atlas::GlyphStyle;
-use crate::buffer::color_matches;
-use crate::cell_renderer::CellInstance;
+use crate::core::{color_matches, CellInstance};
 use crate::renderer::Renderer;
 use flux_types::{CellFlags, Color};
 
@@ -25,7 +24,7 @@ impl Renderer {
     /// input via the fixed editor below, so the shell cursor is redundant
     /// noise. (Raw-mode bypass will need to re-enable it — see the raw-mode
     /// item on Phase 1.)
-    pub fn set_grid(&mut self, grid: &flux_types::RenderGrid) {
+    pub fn set_grid(&mut self, grid: &flux_types::TerminalGrid) {
         let cell_w = self.atlas.cell_width;
         let cell_h = self.atlas.cell_height;
         let baseline = self.atlas.baseline_offset;

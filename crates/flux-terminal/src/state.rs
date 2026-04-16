@@ -1,7 +1,7 @@
 //! Wraps alacritty_terminal::Term with a clean interface.
 //!
 //! Feeds PTY bytes through the vte parser into Term, then converts
-//! the grid to a RenderGrid for the renderer.
+//! the grid to a TerminalGrid for the renderer.
 
 use std::sync::mpsc;
 
@@ -10,7 +10,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
-use flux_types::{CellData, CellFlags, Color, RenderGrid};
+use flux_types::{CellData, CellFlags, Color, TerminalGrid};
 
 use crate::blocks::BlockCapture;
 
@@ -149,10 +149,10 @@ impl TerminalState {
         events
     }
 
-    /// Convert the current terminal grid to a RenderGrid for rendering.
-    pub fn render_grid(&self, fg_default: Color, bg_default: Color) -> RenderGrid {
+    /// Snapshot the current terminal grid for rendering.
+    pub fn grid_snapshot(&self, fg_default: Color, bg_default: Color) -> TerminalGrid {
         let content = self.term.renderable_content();
-        let mut grid = RenderGrid::new(self.cols, self.rows);
+        let mut grid = TerminalGrid::new(self.cols, self.rows);
 
         // Set cursor position
         let cursor_point = content.cursor.point;
@@ -229,7 +229,7 @@ impl TerminalState {
     }
 
     /// Convert an alacritty color to our Color type.
-    fn convert_color(&self, color: alacritty_terminal::vte::ansi::Color, default: &Color) -> Color {
+    fn convert_color(&self, color: alacritty_terminal::vte::ansi::Color, _default: &Color) -> Color {
         match color {
             alacritty_terminal::vte::ansi::Color::Named(named) => {
                 self.named_color(named)

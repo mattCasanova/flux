@@ -5,15 +5,10 @@
 //! structures only.
 
 mod atlas;
-mod buffer;
-mod cell_renderer;
+mod core;
 mod glyph;
-mod gpu;
-mod gpu_resources;
-mod input_chrome;
+mod ui;
 mod output;
-mod pipeline;
-mod render_pass;
 mod renderer;
 
 pub use atlas::GlyphStyle;
