@@ -31,36 +31,108 @@
 //! PTY throughput (a few MB/s peak during `cat` of a large file) the side
 //! parser adds sub-microsecond overhead per KB — negligible next to
 //! alacritty's grid updates or the renderer's per-frame work.
-//!
-//! # Evolution
-//!
-//! R3 (this file) introduces an empty `BlockCapture`. Every `Perform`
-//! callback is the trait default no-op — we don't forward or handle
-//! anything yet. F4 extends it to parse OSC 7 for cwd tracking; F8 adds
-//! OSC 133 for block state. The file intentionally has no visible effect
-//! today — the whole point is to land the scaffolding first so F4/F8 are
-//! a small incremental PR rather than a big one.
+
+use std::path::{Path, PathBuf};
 
 use alacritty_terminal::vte::Perform;
+use percent_encoding::percent_decode_str;
 
 /// Side-channel OSC interceptor. See module docs for the design rationale.
 #[derive(Default)]
 pub(crate) struct BlockCapture {
-    // R3: empty. F4 adds `cwd: Option<PathBuf>`. F8 adds block state.
+    /// The shell's current working directory, updated on each OSC 7
+    /// sequence. `None` until the first OSC 7 arrives.
+    cwd: Option<PathBuf>,
 }
 
 impl BlockCapture {
     pub(crate) fn new() -> Self {
         Self::default()
     }
+
+    pub(crate) fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+
+    /// Parse an OSC 7 sequence: `\x1b]7;file://hostname/path\x07`
+    ///
+    /// `params[0]` is `b"7"`, `params[1]` is `b"file://hostname/path"`.
+    /// We strip the hostname (everything before the first `/` after
+    /// `file://`) and URL-decode the path.
+    fn handle_osc_7(&mut self, params: &[&[u8]]) {
+        let Some(url) = params.get(1).and_then(|b| std::str::from_utf8(b).ok()) else {
+            return;
+        };
+        let Some(rest) = url.strip_prefix("file://") else { return };
+        let Some(path_start) = rest.find('/') else { return };
+        let encoded = &rest[path_start..];
+        let decoded = percent_decode_str(encoded).decode_utf8_lossy();
+        self.cwd = Some(PathBuf::from(decoded.into_owned()));
+    }
 }
 
 impl Perform for BlockCapture {
-    // R3: all callbacks inherit the trait's default no-op bodies.
-    // F4 overrides `osc_dispatch` to catch OSC 7 (cwd).
-    // F8 extends `osc_dispatch` to catch OSC 133 (prompt/command/exit).
-    //
-    // We intentionally do NOT override print/execute/csi_dispatch/etc. —
-    // the main alacritty parser handles all of those. Our parser exists
-    // purely to see OSC sequences that alacritty's ansi layer drops.
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell: bool) {
+        let Some(&first) = params.first() else { return };
+        if first == b"7" {
+            self.handle_osc_7(params);
+        }
+        // F8 extends this match for OSC 133.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::vte::Parser;
+
+    /// Feed a raw byte sequence through the vte parser into BlockCapture
+    /// and return the resulting cwd.
+    fn parse_cwd(input: &[u8]) -> Option<PathBuf> {
+        let mut capture = BlockCapture::new();
+        let mut parser = Parser::new();
+        parser.advance(&mut capture, input);
+        capture.cwd().map(PathBuf::from)
+    }
+
+    #[test]
+    fn basic_osc_7() {
+        let cwd = parse_cwd(b"\x1b]7;file://localhost/tmp\x07");
+        assert_eq!(cwd.as_deref(), Some(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn osc_7_with_spaces() {
+        let cwd = parse_cwd(b"\x1b]7;file://localhost/home/user/my%20folder\x07");
+        assert_eq!(cwd.as_deref(), Some(Path::new("/home/user/my folder")));
+    }
+
+    #[test]
+    fn osc_7_no_hostname() {
+        let cwd = parse_cwd(b"\x1b]7;file:///Users/matt/src\x07");
+        assert_eq!(cwd.as_deref(), Some(Path::new("/Users/matt/src")));
+    }
+
+    #[test]
+    fn osc_7_with_st_terminator() {
+        // String Terminator (\x1b\\) instead of BEL (\x07)
+        let cwd = parse_cwd(b"\x1b]7;file://localhost/tmp\x1b\\");
+        assert_eq!(cwd.as_deref(), Some(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn osc_7_updates_on_cd() {
+        let mut capture = BlockCapture::new();
+        let mut parser = Parser::new();
+        parser.advance(&mut capture, b"\x1b]7;file://localhost/home\x07");
+        assert_eq!(capture.cwd(), Some(Path::new("/home")));
+        parser.advance(&mut capture, b"\x1b]7;file://localhost/tmp\x07");
+        assert_eq!(capture.cwd(), Some(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn no_osc_7_means_none() {
+        let cwd = parse_cwd(b"hello world\n");
+        assert_eq!(cwd, None);
+    }
 }

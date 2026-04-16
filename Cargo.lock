@@ -773,6 +773,7 @@ dependencies = [
  "flux-types",
  "libc",
  "log",
+ "percent-encoding",
  "portable-pty",
 ]
 

@@ -204,6 +204,12 @@ impl TerminalState {
         grid
     }
 
+    /// The shell's current working directory, if known via OSC 7.
+    /// Returns `None` until the shell emits its first OSC 7 sequence.
+    pub fn cwd(&self) -> Option<&std::path::Path> {
+        self.block_capture.cwd()
+    }
+
     /// True when the program on the other end of the PTY is using the
     /// alternate screen buffer — vim, less, man, htop, tmux all set this
     /// bit. It's the single most reliable signal that the user is in a
