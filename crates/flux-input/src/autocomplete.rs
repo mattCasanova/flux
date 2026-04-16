@@ -111,18 +111,9 @@ impl Autocomplete {
         let dirs_only = DIR_ONLY_COMMANDS.contains(&command);
         let partial = &buffer[token_start..cursor];
 
-        // Expand ~ to the user's home directory.
-        let expanded;
-        let partial = if partial.starts_with('~') {
-            if let Some(home) = dirs::home_dir() {
-                expanded = partial.replacen('~', &home.to_string_lossy(), 1);
-                &expanded
-            } else {
-                partial
-            }
-        } else {
-            partial
-        };
+        // Expand ~ and $ENV_VARS before resolving the path.
+        let expanded = expand_shell_vars(partial);
+        let partial = &expanded;
 
         // Resolve subdirectory paths: "src/lib" → list "cwd/src", prefix "lib"
         let (list_dir, prefix) = if let Some(last_slash) = partial.rfind('/') {
@@ -236,6 +227,59 @@ impl Autocomplete {
         self.selected = 0;
         self.prefix.clear();
     }
+}
+
+/// Expand `~` and `$VAR` / `${VAR}` in a path string.
+fn expand_shell_vars(input: &str) -> String {
+    let mut result = input.to_string();
+
+    // Expand ~ at the start to the home directory.
+    if result.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            result = result.replacen('~', &home.to_string_lossy(), 1);
+        }
+    }
+
+    // Expand $VAR and ${VAR} patterns.
+    let mut output = String::with_capacity(result.len());
+    let mut chars = result.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            let braced = chars.peek() == Some(&'{');
+            if braced {
+                chars.next(); // consume '{'
+            }
+            let mut var_name = String::new();
+            while let Some(&c) = chars.peek() {
+                if braced {
+                    if c == '}' {
+                        chars.next();
+                        break;
+                    }
+                } else if !c.is_alphanumeric() && c != '_' {
+                    break;
+                }
+                var_name.push(c);
+                chars.next();
+            }
+            if let Ok(val) = std::env::var(&var_name) {
+                output.push_str(&val);
+            } else {
+                // Unknown var — leave as-is.
+                output.push('$');
+                if braced {
+                    output.push('{');
+                }
+                output.push_str(&var_name);
+                if braced {
+                    output.push('}');
+                }
+            }
+        } else {
+            output.push(ch);
+        }
+    }
+    output
 }
 
 /// List directory entries, sorted: directories first, then files,
