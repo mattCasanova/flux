@@ -95,6 +95,11 @@ impl Autocomplete {
     /// Populate candidates from `cwd` and filter by the current prefix.
     /// `command` is the trigger command (e.g., "cd") — used to decide
     /// whether to show only directories.
+    ///
+    /// If the partial token contains `/` (e.g., `src/lib`), the
+    /// directory portion is resolved relative to `cwd` and we list
+    /// that subdirectory instead. The prefix becomes just the filename
+    /// part after the last `/`.
     pub fn trigger(
         &mut self,
         cwd: &Path,
@@ -104,9 +109,27 @@ impl Autocomplete {
         command: &str,
     ) -> io::Result<()> {
         let dirs_only = DIR_ONLY_COMMANDS.contains(&command);
-        self.all_candidates = list_directory(cwd, dirs_only)?;
+        let partial = &buffer[token_start..cursor];
+
+        // Resolve subdirectory paths: "src/lib" → list "cwd/src", prefix "lib"
+        let (list_dir, prefix) = if let Some(last_slash) = partial.rfind('/') {
+            let dir_part = &partial[..=last_slash];
+            let file_part = &partial[last_slash + 1..];
+            let resolved = cwd.join(dir_part);
+            if resolved.is_dir() {
+                (resolved, file_part.to_string())
+            } else {
+                // Path doesn't exist — no candidates.
+                self.active = false;
+                return Ok(());
+            }
+        } else {
+            (cwd.to_path_buf(), partial.to_string())
+        };
+
+        self.all_candidates = list_directory(&list_dir, dirs_only)?;
         self.token_start = token_start;
-        self.prefix = buffer[token_start..cursor].to_string();
+        self.prefix = prefix;
         self.selected = 0;
         self.recompute_visible();
         self.active = !self.visible.is_empty();
@@ -123,7 +146,10 @@ impl Autocomplete {
             self.dismiss();
             return false;
         }
-        self.prefix = buffer[self.token_start..cursor].to_string();
+        let partial = &buffer[self.token_start..cursor];
+        // Use only the part after the last `/` as the prefix filter,
+        // since candidates are filenames within the resolved directory.
+        self.prefix = partial.rfind('/').map_or(partial, |i| &partial[i + 1..]).to_string();
         self.recompute_visible();
         if self.visible.is_empty() {
             self.dismiss();
