@@ -13,9 +13,11 @@
 //! - [keymap] — key event to terminal escape sequence translation
 
 mod editor;
+pub mod history;
 mod keybindings;
 mod keymap;
 // mod completion;  // Phase 4
 
 pub use editor::InputEditor;
+pub use history::CommandHistory;
 pub use keybindings::{Action, KeybindingManager};

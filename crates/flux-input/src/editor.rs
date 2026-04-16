@@ -1,10 +1,12 @@
-//! Input editor — a single-line text buffer driven by the app.
+//! Input editor — a text buffer with cursor, history, and fine-grained
+//! edit operations driven by the app.
 //!
-//! The app owns key dispatch; this type is just a buffer with fine-grained
-//! edit operations. On Enter, the app calls [`InputEditor::take_line`] to
-//! extract the composed command and forward it to the PTY.
+//! On Enter, the app calls [`InputEditor::take_line`] to extract the
+//! composed command, append it to history, and forward it to the PTY.
 
-/// A single-line editable text buffer.
+use crate::history::CommandHistory;
+
+/// Editable text buffer with command history navigation.
 ///
 /// The cursor is tracked as a byte offset into `buffer` and is always kept
 /// on a character boundary. All mutating methods leave the buffer in a
@@ -14,11 +16,25 @@ pub struct InputEditor {
     buffer: String,
     /// Cursor position as a byte offset into `buffer`.
     cursor: usize,
+    history: CommandHistory,
+    /// `None` = typing a new command. `Some(i)` = recalled history entry.
+    history_cursor: Option<usize>,
+    /// Saved draft when navigating into history. Restored when the user
+    /// moves past the end of history.
+    saved_buffer: Option<String>,
 }
 
 impl InputEditor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct with a pre-loaded history store.
+    pub fn with_history(history: CommandHistory) -> Self {
+        Self {
+            history,
+            ..Self::default()
+        }
     }
 
     pub fn buffer(&self) -> &str {
@@ -78,11 +94,16 @@ impl InputEditor {
         self.cursor = 0;
     }
 
-    /// Extract the buffer and reset the editor. The returned string is the
-    /// composed command — the caller forwards it to the PTY with a trailing `\r`.
+    /// Extract the buffer and reset the editor. Appends the command to
+    /// history. The returned string is the composed command — the caller
+    /// forwards it to the PTY with a trailing `\r`.
     pub fn take_line(&mut self) -> String {
+        let line = std::mem::take(&mut self.buffer);
         self.cursor = 0;
-        std::mem::take(&mut self.buffer)
+        self.history_cursor = None;
+        self.saved_buffer = None;
+        self.history.append(line.clone());
+        line
     }
 
     fn prev_char_boundary(&self) -> usize {
@@ -99,6 +120,71 @@ impl InputEditor {
             .nth(1)
             .map(|(i, _)| self.cursor + i)
             .unwrap_or(self.buffer.len())
+    }
+}
+
+// --- History navigation ---
+
+impl InputEditor {
+    /// Recall the previous history entry. First call saves the current
+    /// buffer as a draft; subsequent calls walk backward. No-op on
+    /// empty history.
+    pub fn history_prev(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        let new_idx = match self.history_cursor {
+            None => {
+                self.saved_buffer = Some(self.buffer.clone());
+                self.history.len() - 1
+            }
+            Some(i) => {
+                if i == 0 {
+                    return; // already at oldest
+                }
+                i - 1
+            }
+        };
+        self.history_cursor = Some(new_idx);
+        if let Some(command) = self.history.get(new_idx) {
+            self.buffer = command.to_string();
+            self.cursor = self.buffer.len();
+        }
+    }
+
+    /// Recall the next history entry. If past the end, restore the
+    /// saved draft and return to "typing new command" state.
+    pub fn history_next(&mut self) {
+        match self.history_cursor {
+            None => {}
+            Some(i) if i + 1 >= self.history.len() => {
+                self.history_cursor = None;
+                self.buffer = self.saved_buffer.take().unwrap_or_default();
+                self.cursor = self.buffer.len();
+            }
+            Some(i) => {
+                self.history_cursor = Some(i + 1);
+                if let Some(command) = self.history.get(i + 1) {
+                    self.buffer = command.to_string();
+                    self.cursor = self.buffer.len();
+                }
+            }
+        }
+    }
+
+    /// True when the buffer holds a recalled history entry rather than
+    /// a fresh draft.
+    pub fn is_in_history_recall(&self) -> bool {
+        self.history_cursor.is_some()
+    }
+
+    /// Dismiss a history recall, restoring the saved draft.
+    pub fn cancel_history_recall(&mut self) {
+        if self.history_cursor.is_some() {
+            self.history_cursor = None;
+            self.buffer = self.saved_buffer.take().unwrap_or_default();
+            self.cursor = self.buffer.len();
+        }
     }
 }
 

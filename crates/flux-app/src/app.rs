@@ -62,7 +62,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: FluxConfig, proxy: winit::event_loop::EventLoopProxy<()>) -> Self {
+    pub fn new(
+        config: FluxConfig,
+        proxy: winit::event_loop::EventLoopProxy<()>,
+        input: InputEditor,
+    ) -> Self {
         Self {
             config,
             proxy,
@@ -70,7 +74,7 @@ impl App {
             renderer: None,
             pty: None,
             terminal: None,
-            input: InputEditor::new(),
+            input,
             raw_mode: false,
             modifiers: ModifiersState::empty(),
             clipboard: None,

@@ -36,6 +36,7 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 arboard = "3"
 percent-encoding = "2"
+tempfile = "3"
 
 # Workspace crates
 flux-types = { path = "crates/flux-types" }

@@ -102,9 +102,26 @@ impl App {
                 self.request_redraw();
                 return;
             }
-            // Arrow up/down are reserved for history (#21) — swallow for now so
-            // they don't bleed into the PTY as cursor movements.
-            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown) => return,
+            Key::Named(NamedKey::ArrowUp) => {
+                self.input.history_prev();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.input.history_next();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::Escape) => {
+                if self.input.is_in_history_recall() {
+                    self.input.cancel_history_recall();
+                    self.update_input_display();
+                    self.request_redraw();
+                    return;
+                }
+            }
             _ => {}
         }
 
