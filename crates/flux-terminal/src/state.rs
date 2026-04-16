@@ -210,6 +210,11 @@ impl TerminalState {
         self.block_capture.cwd()
     }
 
+    /// Exit code of the last finished command, if known via OSC 133;D.
+    pub fn last_exit_code(&self) -> Option<i32> {
+        self.block_capture.last_exit_code()
+    }
+
     /// True when the program on the other end of the PTY is using the
     /// alternate screen buffer — vim, less, man, htop, tmux all set this
     /// bit. It's the single most reliable signal that the user is in a

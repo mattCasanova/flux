@@ -37,12 +37,34 @@ use std::path::{Path, PathBuf};
 use alacritty_terminal::vte::Perform;
 use percent_encoding::percent_decode_str;
 
+/// Current phase of the prompt/command lifecycle tracked by OSC 133.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellPhase {
+    /// Prompt is being displayed, waiting for user input.
+    Prompt,
+    /// User is typing a command (between prompt end and Enter).
+    Input,
+    /// Command is executing.
+    Executing,
+    /// Idle — no shell integration or before first prompt.
+    Idle,
+}
+
 /// Side-channel OSC interceptor. See module docs for the design rationale.
 #[derive(Default)]
 pub(crate) struct BlockCapture {
-    /// The shell's current working directory, updated on each OSC 7
-    /// sequence. `None` until the first OSC 7 arrives.
+    /// The shell's current working directory, updated on each OSC 7.
     cwd: Option<PathBuf>,
+    /// Current shell lifecycle phase from OSC 133.
+    phase: Option<ShellPhase>,
+    /// Exit code of the last finished command from OSC 133;D.
+    last_exit_code: Option<i32>,
+}
+
+impl Default for ShellPhase {
+    fn default() -> Self {
+        Self::Idle
+    }
 }
 
 impl BlockCapture {
@@ -54,11 +76,16 @@ impl BlockCapture {
         self.cwd.as_deref()
     }
 
-    /// Parse an OSC 7 sequence: `\x1b]7;file://hostname/path\x07`
-    ///
-    /// `params[0]` is `b"7"`, `params[1]` is `b"file://hostname/path"`.
-    /// We strip the hostname (everything before the first `/` after
-    /// `file://`) and URL-decode the path.
+    #[allow(dead_code)] // consumed by v0.3 block system
+    pub(crate) fn shell_phase(&self) -> ShellPhase {
+        self.phase.unwrap_or(ShellPhase::Idle)
+    }
+
+    pub(crate) fn last_exit_code(&self) -> Option<i32> {
+        self.last_exit_code
+    }
+
+    /// Parse OSC 7: `\x1b]7;file://hostname/path\x07`
     fn handle_osc_7(&mut self, params: &[&[u8]]) {
         let Some(url) = params.get(1).and_then(|b| std::str::from_utf8(b).ok()) else {
             return;
@@ -69,15 +96,59 @@ impl BlockCapture {
         let decoded = percent_decode_str(encoded).decode_utf8_lossy();
         self.cwd = Some(PathBuf::from(decoded.into_owned()));
     }
+
+    /// Parse OSC 133: shell integration lifecycle events.
+    ///
+    /// - `133;A` — prompt start
+    /// - `133;B` — command start (user typing)
+    /// - `133;C` — execution start
+    /// - `133;D[;exit_code]` — command finished
+    fn handle_osc_133(&mut self, params: &[&[u8]]) {
+        let Some(sub) = params.get(1).and_then(|b| std::str::from_utf8(b).ok()) else {
+            return;
+        };
+        match sub {
+            "A" => {
+                self.phase = Some(ShellPhase::Prompt);
+                log::debug!("OSC 133;A — prompt start");
+            }
+            "B" => {
+                self.phase = Some(ShellPhase::Input);
+                log::debug!("OSC 133;B — command start");
+            }
+            "C" => {
+                self.phase = Some(ShellPhase::Executing);
+                log::debug!("OSC 133;C — execution start");
+            }
+            _ if sub.starts_with("D") => {
+                self.phase = Some(ShellPhase::Idle);
+                // Exit code may follow as params[2] or after ";".
+                let exit_code = params
+                    .get(2)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .and_then(|s| s.parse::<i32>().ok())
+                    .or_else(|| {
+                        // Some shells send "D;0" as a single param.
+                        sub.strip_prefix("D;")
+                            .or_else(|| sub.strip_prefix("D"))
+                            .and_then(|s| s.parse::<i32>().ok())
+                    });
+                self.last_exit_code = exit_code;
+                log::debug!("OSC 133;D — command finished, exit={:?}", exit_code);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Perform for BlockCapture {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell: bool) {
         let Some(&first) = params.first() else { return };
-        if first == b"7" {
-            self.handle_osc_7(params);
+        match first {
+            b"7" => self.handle_osc_7(params),
+            b"133" => self.handle_osc_133(params),
+            _ => {}
         }
-        // F8 extends this match for OSC 133.
     }
 }
 
@@ -86,8 +157,6 @@ mod tests {
     use super::*;
     use alacritty_terminal::vte::Parser;
 
-    /// Feed a raw byte sequence through the vte parser into BlockCapture
-    /// and return the resulting cwd.
     fn parse_cwd(input: &[u8]) -> Option<PathBuf> {
         let mut capture = BlockCapture::new();
         let mut parser = Parser::new();
@@ -115,7 +184,6 @@ mod tests {
 
     #[test]
     fn osc_7_with_st_terminator() {
-        // String Terminator (\x1b\\) instead of BEL (\x07)
         let cwd = parse_cwd(b"\x1b]7;file://localhost/tmp\x1b\\");
         assert_eq!(cwd.as_deref(), Some(Path::new("/tmp")));
     }
@@ -134,5 +202,43 @@ mod tests {
     fn no_osc_7_means_none() {
         let cwd = parse_cwd(b"hello world\n");
         assert_eq!(cwd, None);
+    }
+
+    #[test]
+    fn osc_133_lifecycle() {
+        let mut capture = BlockCapture::new();
+        let mut parser = Parser::new();
+
+        assert_eq!(capture.shell_phase(), ShellPhase::Idle);
+
+        parser.advance(&mut capture, b"\x1b]133;A\x07");
+        assert_eq!(capture.shell_phase(), ShellPhase::Prompt);
+
+        parser.advance(&mut capture, b"\x1b]133;B\x07");
+        assert_eq!(capture.shell_phase(), ShellPhase::Input);
+
+        parser.advance(&mut capture, b"\x1b]133;C\x07");
+        assert_eq!(capture.shell_phase(), ShellPhase::Executing);
+
+        parser.advance(&mut capture, b"\x1b]133;D;0\x07");
+        assert_eq!(capture.shell_phase(), ShellPhase::Idle);
+        assert_eq!(capture.last_exit_code(), Some(0));
+    }
+
+    #[test]
+    fn osc_133_nonzero_exit() {
+        let mut capture = BlockCapture::new();
+        let mut parser = Parser::new();
+        parser.advance(&mut capture, b"\x1b]133;D;127\x07");
+        assert_eq!(capture.last_exit_code(), Some(127));
+    }
+
+    #[test]
+    fn osc_133_no_exit_code() {
+        let mut capture = BlockCapture::new();
+        let mut parser = Parser::new();
+        parser.advance(&mut capture, b"\x1b]133;D\x07");
+        assert_eq!(capture.shell_phase(), ShellPhase::Idle);
+        assert_eq!(capture.last_exit_code(), None);
     }
 }
