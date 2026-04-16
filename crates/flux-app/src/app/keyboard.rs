@@ -69,10 +69,11 @@ impl App {
                 true
             }
             Key::Named(NamedKey::Tab) | Key::Named(NamedKey::Enter) => {
-                if let Some(replacement) = self.autocomplete.commit() {
-                    let token_start = self.autocomplete.token_start();
-                    let cursor = self.input.cursor();
-                    self.input.replace_range(token_start, cursor, &replacement);
+                let cursor = self.input.cursor();
+                if let Some((replace_start, replacement)) =
+                    self.autocomplete.commit(self.input.buffer(), cursor)
+                {
+                    self.input.replace_range(replace_start, cursor, &replacement);
                 }
                 self.autocomplete.dismiss();
                 self.popup = PopupState::Hidden;

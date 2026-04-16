@@ -188,9 +188,11 @@ impl Autocomplete {
         self.selected = self.selected.saturating_sub(1);
     }
 
-    /// Return the text to insert for the selected candidate.
-    /// Directories get a trailing `/`.
-    pub fn commit(&self) -> Option<String> {
+    /// Return `(replace_start, replacement)` for the selected candidate.
+    /// `replace_start` is the byte offset where the replacement begins —
+    /// after the last `/` in the partial token so the directory path is
+    /// preserved. Directories get a trailing `/`.
+    pub fn commit(&self, buffer: &str, cursor: usize) -> Option<(usize, String)> {
         if !self.active {
             return None;
         }
@@ -199,7 +201,15 @@ impl Autocomplete {
             CandidateKind::Directory => format!("{}/", cand.name),
             _ => cand.name.clone(),
         };
-        Some(replacement)
+
+        // Only replace the filename portion — preserve the directory path.
+        let partial = &buffer[self.token_start..cursor];
+        let replace_start = partial
+            .rfind('/')
+            .map(|i| self.token_start + i + 1)
+            .unwrap_or(self.token_start);
+
+        Some((replace_start, replacement))
     }
 
     pub fn dismiss(&mut self) {
@@ -335,7 +345,8 @@ mod tests {
 
         let mut ac = Autocomplete::default();
         ac.trigger(dir.path(), "cd ", 3, 3, "cd").unwrap();
-        let result = ac.commit().unwrap();
+        let (start, result) = ac.commit("cd ", 3).unwrap();
+        assert_eq!(start, 3);
         assert_eq!(result, "mydir/");
     }
 
