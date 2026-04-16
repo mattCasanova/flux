@@ -5,7 +5,7 @@
 
 use flux_types::Color;
 
-use super::App;
+use super::{App, PopupState};
 
 impl App {
     /// Render the terminal grid.
@@ -35,6 +35,44 @@ impl App {
         let Some(renderer) = &mut self.renderer else { return };
         let cursor = (self.input.cursor_line(), self.input.cursor_col_in_line());
         renderer.set_input_block(self.input.buffer(), cursor);
+
+        // Autocomplete popup.
+        if matches!(self.popup, PopupState::Autocomplete) && self.autocomplete.active() {
+            let candidates: Vec<(String, flux_renderer::PopupKind)> = self
+                .autocomplete
+                .visible_candidates()
+                .iter()
+                .map(|c| {
+                    let kind = match c.kind {
+                        flux_input::CandidateKind::Directory => flux_renderer::PopupKind::Directory,
+                        flux_input::CandidateKind::File => flux_renderer::PopupKind::File,
+                        flux_input::CandidateKind::Symlink => flux_renderer::PopupKind::Symlink,
+                        flux_input::CandidateKind::Other => flux_renderer::PopupKind::Other,
+                    };
+                    (c.name.clone(), kind)
+                })
+                .collect();
+
+            let selected = self.autocomplete.selected_index();
+
+            // Compute anchor position — cursor row Y in the input bar.
+            let metrics = renderer.cell_metrics();
+            let cell_h = metrics.height;
+            let window_h = self.window.as_ref().map(|w| w.inner_size().height).unwrap_or(0) as f32;
+            let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+            let pad_y = self.config.window.padding_vertical * scale;
+            let line_count = self.input.line_count();
+            let block_bottom_y = window_h - pad_y - cell_h;
+            let block_top_y = block_bottom_y - (line_count as f32 - 1.0) * cell_h;
+            let cursor_row = self.input.cursor_line();
+            let anchor_row_y = block_top_y + (cursor_row as f32) * cell_h;
+            // +2 for the prompt prefix characters.
+            let anchor_col = self.input.cursor_col_in_line() + 2;
+
+            renderer.set_autocomplete_popup(&candidates, selected, anchor_col, anchor_row_y);
+        } else {
+            renderer.hide_autocomplete_popup();
+        }
     }
 
     pub(super) fn handle_redraw(&mut self) {

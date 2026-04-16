@@ -3,3 +3,6 @@
 //! `impl Renderer` block with methods for a specific UI element.
 
 mod input_bar;
+mod popup;
+
+pub use popup::PopupKind;

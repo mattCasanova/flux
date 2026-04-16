@@ -12,12 +12,13 @@
 //! - [keybindings] — keybinding manager
 //! - [keymap] — key event to terminal escape sequence translation
 
+pub mod autocomplete;
 mod editor;
 pub mod history;
 mod keybindings;
 mod keymap;
-// mod completion;  // Phase 4
 
+pub use autocomplete::{Autocomplete, CandidateKind};
 pub use editor::InputEditor;
 pub use history::CommandHistory;
 pub use keybindings::{Action, KeybindingManager};

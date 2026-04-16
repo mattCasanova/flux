@@ -13,3 +13,4 @@ mod renderer;
 
 pub use atlas::GlyphStyle;
 pub use renderer::{CellMetrics, Renderer};
+pub use ui::PopupKind;

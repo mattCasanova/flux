@@ -23,7 +23,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use flux_input::InputEditor;
+use flux_input::{Autocomplete, InputEditor};
 use flux_terminal::pty::PtyManager;
 use flux_terminal::state::TerminalState;
 
@@ -58,6 +58,7 @@ pub struct App {
     /// `Hidden` variant; F7 / F14 add autocomplete and search intercepts
     /// that read this to decide whether to swallow a keystroke.
     pub(crate) popup: PopupState,
+    pub(crate) autocomplete: Autocomplete,
     /// Tracks the input bar's line count so we only recompute layout
     /// when it changes (avoids unnecessary PTY resizes).
     pub(crate) last_input_lines: usize,
@@ -81,6 +82,7 @@ impl App {
             modifiers: ModifiersState::empty(),
             clipboard: None,
             popup: PopupState::Hidden,
+            autocomplete: Autocomplete::default(),
             last_input_lines: 1,
         }
     }

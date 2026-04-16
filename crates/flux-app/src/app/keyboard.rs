@@ -3,16 +3,14 @@
 //! `handle_keyboard` is the top-level entry point. Order of operations:
 //!
 //! 1. Drop key releases (only Pressed events do anything).
-//! 2. **Popup intercept** (R6 scaffold) — if an overlay like
-//!    autocomplete or search is active, give it first refusal on
-//!    the key. R6 only has `PopupState::Hidden` so this branch
-//!    currently does nothing; F7 and F14 add real arms. The match
-//!    is exhaustive with NO wildcard arm, so adding a new variant
-//!    is a compile error until its intercept is wired up.
+//! 2. **Popup intercept** — if autocomplete (or future search) is
+//!    active, give it first refusal on the key.
 //! 3. Clipboard shortcut short-circuit — paste must work in both
 //!    raw and cooked mode, so it runs before the mode split.
 //! 4. Branch to `handle_keyboard_raw` (PTY-first) or
 //!    `handle_keyboard_cooked` (editor-first) based on `raw_mode`.
+
+use flux_input::Autocomplete;
 
 use super::{App, PopupState};
 
@@ -24,17 +22,16 @@ impl App {
             return;
         }
 
-        // Popup intercept. Exhaustive match — NO wildcard arm. F7
-        // adds `PopupState::Autocomplete => { ... }`, F14 adds
-        // `PopupState::Search => { ... }`; each feature's arm is
-        // free to return early if it handled the event.
+        // Popup intercept — exhaustive match, no wildcard.
         match &self.popup {
             PopupState::Hidden => {}
+            PopupState::Autocomplete => {
+                if self.handle_autocomplete_key(&event) {
+                    return;
+                }
+            }
         }
 
-        // Clipboard shortcuts run ahead of mode-specific handling so they
-        // work identically in cooked and raw mode. Cmd on macOS maps to
-        // super in winit; Ctrl+Shift is the cross-platform fallback.
         if self.is_paste_shortcut(&event) {
             self.handle_paste();
             return;
@@ -46,6 +43,60 @@ impl App {
         }
 
         self.handle_keyboard_cooked(event);
+    }
+
+    /// Handle a key while the autocomplete popup is active. Returns
+    /// `true` if the key was consumed (caller should not process it
+    /// further).
+    fn handle_autocomplete_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+
+        if !self.autocomplete.active() {
+            return false;
+        }
+
+        match &event.logical_key {
+            Key::Named(NamedKey::ArrowUp) => {
+                self.autocomplete.select_prev();
+                self.update_input_display();
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.autocomplete.select_next();
+                self.update_input_display();
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::Tab) | Key::Named(NamedKey::Enter) => {
+                if let Some(replacement) = self.autocomplete.commit() {
+                    let token_start = self.autocomplete.token_start();
+                    let cursor = self.input.cursor();
+                    self.input.replace_range(token_start, cursor, &replacement);
+                }
+                self.autocomplete.dismiss();
+                self.popup = PopupState::Hidden;
+                self.update_input_display();
+                self.request_redraw();
+                // After committing, check if we should re-trigger (e.g.,
+                // cd dir/ should immediately offer the next level).
+                self.maybe_update_autocomplete();
+                true
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.autocomplete.dismiss();
+                self.popup = PopupState::Hidden;
+                self.update_input_display();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                // Let the key fall through to normal text input.
+                // After the text is inserted, handle_keyboard_cooked
+                // calls maybe_update_autocomplete to re-filter.
+                false
+            }
+        }
     }
 
     /// Cooked-mode key handling — keystrokes go through the Flux input editor,
@@ -73,12 +124,14 @@ impl App {
             Key::Named(NamedKey::Backspace) => {
                 self.input.backspace();
                 self.update_input_display();
+                self.maybe_update_autocomplete();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::Delete) => {
                 self.input.delete_forward();
                 self.update_input_display();
+                self.maybe_update_autocomplete();
                 self.request_redraw();
                 return;
             }
@@ -139,11 +192,6 @@ impl App {
             _ => {}
         }
 
-        // Everything else: text input or Ctrl+<letter>. `text_with_all_modifiers`
-        // folds Ctrl effects into the string (Ctrl+C → \x03, Ctrl+D → \x04, etc.),
-        // which is the terminal-correct interpretation. Single-byte control
-        // characters bypass the editor and go straight to the PTY; anything else
-        // is insertable text.
         let Some(text) = event.text_with_all_modifiers() else { return };
         if text.is_empty() {
             return;
@@ -152,7 +200,6 @@ impl App {
         let is_control =
             text.len() == 1 && (text.as_bytes()[0] < 0x20 || text.as_bytes()[0] == 0x7f);
         if is_control {
-            // Ctrl+C clears the editor buffer so the user starts fresh after the interrupt.
             if text.as_bytes()[0] == 0x03 {
                 self.input.clear();
                 self.update_input_display();
@@ -163,14 +210,51 @@ impl App {
         } else {
             self.input.insert_str(text);
             self.update_input_display();
+            self.maybe_update_autocomplete();
         }
 
         self.request_redraw();
     }
 
-    /// Raw-mode key handling — the PTY owns the keyboard. Forward named keys
-    /// as the standard xterm escape sequences and everything else via
-    /// `text_with_all_modifiers` so Ctrl combos land correctly.
+    /// Check if autocomplete should trigger or update after a keystroke.
+    pub(super) fn maybe_update_autocomplete(&mut self) {
+        let buffer = self.input.buffer();
+        let cursor = self.input.cursor();
+
+        // Popup already open — update the filter.
+        if matches!(self.popup, PopupState::Autocomplete) && self.autocomplete.active() {
+            if !self.autocomplete.update_filter(buffer, cursor) {
+                self.popup = PopupState::Hidden;
+            }
+            self.update_input_display();
+            return;
+        }
+
+        // Check if we should trigger.
+        let Some(token_start) = Autocomplete::should_trigger(buffer, cursor) else {
+            return;
+        };
+        let Some(cwd) = self
+            .terminal
+            .as_ref()
+            .and_then(|t| t.cwd())
+            .map(|p| p.to_path_buf())
+        else {
+            return;
+        };
+        match self.autocomplete.trigger(&cwd, buffer, cursor, token_start) {
+            Ok(()) if self.autocomplete.active() => {
+                self.popup = PopupState::Autocomplete;
+                self.update_input_display();
+            }
+            Ok(()) => {}
+            Err(e) => {
+                log::warn!("autocomplete trigger failed: {}", e);
+            }
+        }
+    }
+
+    /// Raw-mode key handling — the PTY owns the keyboard.
     fn handle_keyboard_raw(&mut self, event: winit::event::KeyEvent) {
         use winit::keyboard::{Key, NamedKey};
         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;

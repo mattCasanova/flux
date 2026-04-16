@@ -41,6 +41,18 @@ impl InputEditor {
         &self.buffer
     }
 
+    /// Byte offset of the cursor.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Replace the byte range `[start, end)` with `replacement`.
+    /// Cursor is placed at `start + replacement.len()`.
+    pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) {
+        self.buffer.replace_range(start..end, replacement);
+        self.cursor = start + replacement.len();
+    }
+
     /// Cursor position as a displayed column (character count before the cursor).
     /// Wide-character support (CJK) will land with text shaping (#20).
     pub fn cursor_col(&self) -> usize {
