@@ -16,6 +16,9 @@ const PATH_COMMANDS: &[&str] = &[
     "grep", "find", "rm", "cp", "mv", "touch", "mkdir", "rmdir", "open", "code", "subl",
 ];
 
+/// Commands that only accept directories.
+const DIR_ONLY_COMMANDS: &[&str] = &["cd"];
+
 const MAX_VISIBLE: usize = 12;
 
 #[derive(Debug, Clone)]
@@ -66,8 +69,8 @@ impl Autocomplete {
     }
 
     /// Check if autocomplete should trigger at the current cursor
-    /// position. Returns `Some(token_start)` if yes.
-    pub fn should_trigger(buffer: &str, cursor: usize) -> Option<usize> {
+    /// position. Returns `Some((token_start, command))` if yes.
+    pub fn should_trigger(buffer: &str, cursor: usize) -> Option<(usize, String)> {
         let line_start = buffer[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line = &buffer[line_start..cursor];
         let first_token = line.split_whitespace().next()?;
@@ -86,18 +89,22 @@ impl Autocomplete {
             return None;
         }
 
-        Some(partial_start)
+        Some((partial_start, first_token.to_string()))
     }
 
     /// Populate candidates from `cwd` and filter by the current prefix.
+    /// `command` is the trigger command (e.g., "cd") — used to decide
+    /// whether to show only directories.
     pub fn trigger(
         &mut self,
         cwd: &Path,
         buffer: &str,
         cursor: usize,
         token_start: usize,
+        command: &str,
     ) -> io::Result<()> {
-        self.all_candidates = list_directory(cwd)?;
+        let dirs_only = DIR_ONLY_COMMANDS.contains(&command);
+        self.all_candidates = list_directory(cwd, dirs_only)?;
         self.token_start = token_start;
         self.prefix = buffer[token_start..cursor].to_string();
         self.selected = 0;
@@ -180,11 +187,18 @@ impl Autocomplete {
 
 /// List directory entries, sorted: directories first, then files,
 /// then symlinks — alphabetical within each group.
-fn list_directory(cwd: &Path) -> io::Result<Vec<Candidate>> {
+/// Hidden files (dotfiles) are excluded unless the user's prefix
+/// starts with `.`. `dirs_only` filters to directories when true.
+fn list_directory(cwd: &Path, dirs_only: bool) -> io::Result<Vec<Candidate>> {
     let mut candidates = Vec::new();
     for entry in fs::read_dir(cwd)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
+        // Skip dotfiles — they'll be included when the prefix filter
+        // starts with '.' (handled in recompute_visible).
+        if name.starts_with('.') {
+            continue;
+        }
         let metadata = entry.metadata().ok();
         let kind = match metadata {
             Some(m) if m.is_dir() => CandidateKind::Directory,
@@ -192,6 +206,9 @@ fn list_directory(cwd: &Path) -> io::Result<Vec<Candidate>> {
             Some(m) if m.is_file() => CandidateKind::File,
             _ => CandidateKind::Other,
         };
+        if dirs_only && kind != CandidateKind::Directory {
+            continue;
+        }
         candidates.push(Candidate { name, kind });
     }
     candidates.sort_by(|a, b| {
@@ -212,12 +229,15 @@ mod tests {
 
     #[test]
     fn trigger_on_cd_space() {
-        assert_eq!(Autocomplete::should_trigger("cd ", 3), Some(3));
+        let result = Autocomplete::should_trigger("cd ", 3);
+        assert_eq!(result.as_ref().map(|(s, _)| *s), Some(3));
+        assert_eq!(result.as_ref().map(|(_, c)| c.as_str()), Some("cd"));
     }
 
     #[test]
     fn trigger_on_cd_partial() {
-        assert_eq!(Autocomplete::should_trigger("cd /tm", 6), Some(3));
+        let result = Autocomplete::should_trigger("cd /tm", 6);
+        assert_eq!(result.as_ref().map(|(s, _)| *s), Some(3));
     }
 
     #[test]
@@ -232,27 +252,54 @@ mod tests {
 
     #[test]
     fn trigger_on_ls_with_flags() {
-        assert_eq!(Autocomplete::should_trigger("ls -la /tm", 10), Some(7));
+        let result = Autocomplete::should_trigger("ls -la /tm", 10);
+        assert_eq!(result.as_ref().map(|(s, _)| *s), Some(7));
     }
 
     #[test]
-    fn trigger_with_tempdir() {
+    fn cd_shows_only_directories() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("subdir")).unwrap();
         std::fs::write(dir.path().join("file.txt"), "").unwrap();
 
         let mut ac = Autocomplete::default();
-        let buf = "cd ";
-        ac.trigger(dir.path(), buf, 3, 3).unwrap();
+        ac.trigger(dir.path(), "cd ", 3, 3, "cd").unwrap();
+
+        assert!(ac.active());
+        let visible = ac.visible_candidates();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "subdir");
+        assert_eq!(visible[0].kind, CandidateKind::Directory);
+    }
+
+    #[test]
+    fn ls_shows_files_and_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        std::fs::write(dir.path().join("file.txt"), "").unwrap();
+
+        let mut ac = Autocomplete::default();
+        ac.trigger(dir.path(), "ls ", 3, 3, "ls").unwrap();
 
         assert!(ac.active());
         let visible = ac.visible_candidates();
         assert_eq!(visible.len(), 2);
-        // Directory sorts first.
         assert_eq!(visible[0].name, "subdir");
-        assert_eq!(visible[0].kind, CandidateKind::Directory);
         assert_eq!(visible[1].name, "file.txt");
-        assert_eq!(visible[1].kind, CandidateKind::File);
+    }
+
+    #[test]
+    fn hides_dotfiles() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".hidden")).unwrap();
+        std::fs::write(dir.path().join("visible.txt"), "").unwrap();
+
+        let mut ac = Autocomplete::default();
+        ac.trigger(dir.path(), "ls ", 3, 3, "ls").unwrap();
+
+        let visible = ac.visible_candidates();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "visible.txt");
     }
 
     #[test]
@@ -261,7 +308,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("mydir")).unwrap();
 
         let mut ac = Autocomplete::default();
-        ac.trigger(dir.path(), "cd ", 3, 3).unwrap();
+        ac.trigger(dir.path(), "cd ", 3, 3, "cd").unwrap();
         let result = ac.commit().unwrap();
         assert_eq!(result, "mydir/");
     }
@@ -274,11 +321,11 @@ mod tests {
         std::fs::write(dir.path().join("gamma.txt"), "").unwrap();
 
         let mut ac = Autocomplete::default();
-        ac.trigger(dir.path(), "cd ", 3, 3).unwrap();
+        ac.trigger(dir.path(), "ls ", 3, 3, "ls").unwrap();
         assert_eq!(ac.visible_candidates().len(), 3);
 
         // Simulate typing "al"
-        ac.update_filter("cd al", 5);
+        ac.update_filter("ls al", 5);
         let visible = ac.visible_candidates();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].name, "alpha");

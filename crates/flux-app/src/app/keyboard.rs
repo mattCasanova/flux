@@ -231,7 +231,7 @@ impl App {
         }
 
         // Check if we should trigger.
-        let Some(token_start) = Autocomplete::should_trigger(buffer, cursor) else {
+        let Some((token_start, command)) = Autocomplete::should_trigger(buffer, cursor) else {
             return;
         };
         let Some(cwd) = self
@@ -242,7 +242,7 @@ impl App {
         else {
             return;
         };
-        match self.autocomplete.trigger(&cwd, buffer, cursor, token_start) {
+        match self.autocomplete.trigger(&cwd, buffer, cursor, token_start, &command) {
             Ok(()) if self.autocomplete.active() => {
                 self.popup = PopupState::Autocomplete;
                 self.update_input_display();
