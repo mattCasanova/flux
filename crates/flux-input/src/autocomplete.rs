@@ -44,6 +44,11 @@ pub struct Autocomplete {
     /// Byte offset in the editor buffer where the partial token starts.
     token_start: usize,
     prefix: String,
+    /// The raw token from the buffer that resolved to the directory we
+    /// listed. E.g., `$HOME/` or `src/`. Used by `commit` to build the
+    /// full replacement path since the raw buffer contains unexpanded
+    /// vars that `rfind('/')` can't split correctly.
+    raw_dir_token: String,
     active: bool,
 }
 
@@ -109,16 +114,15 @@ impl Autocomplete {
         command: &str,
     ) -> io::Result<()> {
         let dirs_only = DIR_ONLY_COMMANDS.contains(&command);
-        let partial = &buffer[token_start..cursor];
+        let raw_partial = &buffer[token_start..cursor];
 
         // Expand ~ and $ENV_VARS before resolving the path.
-        let mut expanded = expand_shell_vars(partial);
+        let mut expanded = expand_shell_vars(raw_partial);
         // If expansion produced a directory path without a trailing /,
-        // append it so the path splitter doesn't try to match the last
-        // component as a filename prefix. E.g., $HOME → /Users/matt
-        // should become /Users/matt/ so we list its contents, not
-        // treat "matt" as a prefix filter on /Users/.
-        if !expanded.ends_with('/') && std::path::Path::new(&expanded).is_dir() {
+        // append it so the path splitter treats it as a complete dir.
+        let expansion_added_slash =
+            !expanded.ends_with('/') && std::path::Path::new(&expanded).is_dir();
+        if expansion_added_slash {
             expanded.push('/');
         }
         let partial = &expanded;
@@ -146,6 +150,17 @@ impl Autocomplete {
         self.all_candidates = list_directory(&list_dir, dirs_only)?;
         self.token_start = token_start;
         self.prefix = prefix;
+        // Build the raw directory token for commit — the unexpanded
+        // text that maps to the directory we listed.
+        self.raw_dir_token = if let Some(last_slash) = raw_partial.rfind('/') {
+            raw_partial[..=last_slash].to_string()
+        } else if expansion_added_slash {
+            // Expansion resolved to a dir (e.g., $HOME → /Users/matt/).
+            // The raw token IS the directory — append / for commit.
+            format!("{}/", raw_partial)
+        } else {
+            String::new()
+        };
         self.selected = 0;
         self.recompute_visible();
         self.active = !self.visible.is_empty();
@@ -205,27 +220,22 @@ impl Autocomplete {
     }
 
     /// Return `(replace_start, replacement)` for the selected candidate.
-    /// `replace_start` is the byte offset where the replacement begins —
-    /// after the last `/` in the partial token so the directory path is
-    /// preserved. Directories get a trailing `/`.
-    pub fn commit(&self, buffer: &str, cursor: usize) -> Option<(usize, String)> {
+    /// Replaces the entire token (from `token_start`) with the raw
+    /// directory prefix + candidate name. This correctly handles
+    /// expanded vars like `$HOME/Documents/`.
+    pub fn commit(&self, _buffer: &str, _cursor: usize) -> Option<(usize, String)> {
         if !self.active {
             return None;
         }
         let cand = self.visible.get(self.selected).and_then(|&i| self.all_candidates.get(i))?;
-        let replacement = match cand.kind {
+        let name = match cand.kind {
             CandidateKind::Directory => format!("{}/", cand.name),
             _ => cand.name.clone(),
         };
-
-        // Only replace the filename portion — preserve the directory path.
-        let partial = &buffer[self.token_start..cursor];
-        let replace_start = partial
-            .rfind('/')
-            .map(|i| self.token_start + i + 1)
-            .unwrap_or(self.token_start);
-
-        Some((replace_start, replacement))
+        // Build full replacement: raw dir token + candidate name.
+        // E.g., "$HOME/" + "Documents/" or "src/flux/" + "lib.rs"
+        let replacement = format!("{}{}", self.raw_dir_token, name);
+        Some((self.token_start, replacement))
     }
 
     pub fn dismiss(&mut self) {
@@ -234,6 +244,7 @@ impl Autocomplete {
         self.visible.clear();
         self.selected = 0;
         self.prefix.clear();
+        self.raw_dir_token.clear();
     }
 }
 
@@ -416,7 +427,7 @@ mod tests {
         ac.trigger(dir.path(), "cd ", 3, 3, "cd").unwrap();
         let (start, result) = ac.commit("cd ", 3).unwrap();
         assert_eq!(start, 3);
-        assert_eq!(result, "mydir/");
+        assert_eq!(result, "mydir/");  // raw_dir_token is "" so just the name
     }
 
     #[test]
