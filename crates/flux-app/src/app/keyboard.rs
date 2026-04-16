@@ -70,18 +70,25 @@ impl App {
             }
             Key::Named(NamedKey::Tab) | Key::Named(NamedKey::Enter) => {
                 let cursor = self.input.cursor();
-                if let Some((replace_start, replacement)) =
+                let committed_dir = if let Some((replace_start, replacement)) =
                     self.autocomplete.commit(self.input.buffer(), cursor)
                 {
+                    let is_dir = replacement.ends_with('/');
                     self.input.replace_range(replace_start, cursor, &replacement);
-                }
+                    is_dir
+                } else {
+                    false
+                };
                 self.autocomplete.dismiss();
                 self.popup = PopupState::Hidden;
                 self.update_input_display();
                 self.request_redraw();
-                // After committing, check if we should re-trigger (e.g.,
-                // cd dir/ should immediately offer the next level).
-                self.maybe_update_autocomplete();
+                // Only re-trigger if we committed a directory — chaining
+                // into subdirectories. Files are a leaf; the user hits
+                // Enter again to run the command.
+                if committed_dir {
+                    self.maybe_update_autocomplete();
+                }
                 true
             }
             Key::Named(NamedKey::Escape) => {
