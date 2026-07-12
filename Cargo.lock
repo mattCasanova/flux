@@ -736,6 +736,7 @@ dependencies = [
 name = "flux-input"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "flux-types",
  "log",
  "tempfile",
