@@ -16,7 +16,9 @@ impl App {
     /// on startup, window resize, scale change, and raw-mode transitions.
     pub(super) fn apply_window_layout(&mut self) {
         let Some(window) = &self.window else { return };
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
 
         let inner_size = window.inner_size();
         let metrics = renderer.cell_metrics();
@@ -66,7 +68,9 @@ impl App {
         let font_family = self.config.font.family.clone();
         let line_height = self.config.font.line_height;
 
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         if let Err(e) = renderer.rebuild_font(&font_family, font_size_px, line_height) {
             log::error!("Failed to rebuild font: {}", e);
             return;

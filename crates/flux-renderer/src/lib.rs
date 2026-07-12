@@ -7,9 +7,10 @@
 mod atlas;
 mod core;
 mod glyph;
-mod ui;
 mod output;
 mod renderer;
+mod selection;
+mod ui;
 
 pub use atlas::GlyphStyle;
 pub use renderer::{CellMetrics, Renderer};

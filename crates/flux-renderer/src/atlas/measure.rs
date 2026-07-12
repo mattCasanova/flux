@@ -26,7 +26,13 @@ pub(crate) fn measure_cell(
 ) -> (f32, f32, f32) {
     let mut buffer = Buffer::new(font_system, *metrics);
     let attrs = Attrs::new().family(Family::Name(font_family));
-    buffer.set_text(font_system, "M", &attrs, cosmic_text::Shaping::Advanced, None);
+    buffer.set_text(
+        font_system,
+        "M",
+        &attrs,
+        cosmic_text::Shaping::Advanced,
+        None,
+    );
     buffer.shape_until_scroll(font_system, false);
 
     let mut cell_width = metrics.font_size * FALLBACK_CELL_WIDTH_RATIO;

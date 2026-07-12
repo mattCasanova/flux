@@ -37,6 +37,10 @@ impl App {
             return;
         }
 
+        if self.is_copy_shortcut(&event) && self.handle_copy() {
+            return;
+        }
+
         if self.raw_mode {
             self.handle_keyboard_raw(event);
             return;
@@ -123,6 +127,7 @@ impl App {
                     // Submitting a command returns the viewport to the
                     // live tail — standard "typing brings you back".
                     self.snap_to_bottom();
+                    self.clear_selection();
                     let line = self.input.take_line();
                     if let Some(pty) = &mut self.pty {
                         let _ = pty.write(line.as_bytes());
@@ -217,6 +222,10 @@ impl App {
                     self.request_redraw();
                     return;
                 }
+                if self.selection.is_some() {
+                    self.clear_selection();
+                    return;
+                }
             }
             _ => {}
         }
@@ -239,6 +248,8 @@ impl App {
                 let _ = pty.write(text.as_bytes());
             }
         } else {
+            // Typing means the user has moved on — stale selections go.
+            self.clear_selection();
             self.input.insert_str(text);
             self.update_input_display();
             self.maybe_update_autocomplete();

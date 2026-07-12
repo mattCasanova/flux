@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use anyhow::Result;
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 /// Callback to wake the event loop when PTY output arrives.
 pub type WakeCallback = Box<dyn Fn() + Send>;

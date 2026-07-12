@@ -23,10 +23,22 @@ pub(crate) struct QuadVertex {
 ///   |  \|
 ///   0---1
 pub(crate) const QUAD_VERTICES: &[QuadVertex] = &[
-    QuadVertex { position: [0.0, 1.0], uv: [0.0, 1.0] }, // bottom-left
-    QuadVertex { position: [1.0, 1.0], uv: [1.0, 1.0] }, // bottom-right
-    QuadVertex { position: [0.0, 0.0], uv: [0.0, 0.0] }, // top-left
-    QuadVertex { position: [1.0, 0.0], uv: [1.0, 0.0] }, // top-right
+    QuadVertex {
+        position: [0.0, 1.0],
+        uv: [0.0, 1.0],
+    }, // bottom-left
+    QuadVertex {
+        position: [1.0, 1.0],
+        uv: [1.0, 1.0],
+    }, // bottom-right
+    QuadVertex {
+        position: [0.0, 0.0],
+        uv: [0.0, 0.0],
+    }, // top-left
+    QuadVertex {
+        position: [1.0, 0.0],
+        uv: [1.0, 0.0],
+    }, // top-right
 ];
 
 /// Per-glyph instance data — one per visible glyph on screen.

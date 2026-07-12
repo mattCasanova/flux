@@ -11,10 +11,10 @@ mod render_pass;
 mod resources;
 mod types;
 
-pub(crate) use buffer::{color_matches, INITIAL_MAX_CELLS};
+pub(crate) use buffer::{INITIAL_MAX_CELLS, color_matches};
 pub(crate) use gpu::GpuContext;
 pub(crate) use pipeline::{
-    create_bind_group, create_bind_group_layout, create_cell_pipeline, Uniforms,
+    Uniforms, create_bind_group, create_bind_group_layout, create_cell_pipeline,
 };
 pub(crate) use resources::{
     create_instance_buffer, create_quad_buffer, create_sampler, create_uniform_buffer,

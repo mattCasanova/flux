@@ -10,8 +10,12 @@ use super::{App, PopupState};
 impl App {
     /// Render the terminal grid.
     pub(super) fn update_display(&mut self) {
-        let Some(terminal) = &self.terminal else { return };
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(terminal) = &self.terminal else {
+            return;
+        };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
 
         let fg = Color::from_hex(&self.config.theme.foreground).unwrap_or_default();
         let bg = Color::from_hex(&self.config.theme.background)
@@ -19,6 +23,9 @@ impl App {
 
         let grid = terminal.grid_snapshot(fg, bg);
         renderer.set_grid(&grid);
+        // Re-sync the selection overlay: set_grid may have changed the
+        // bottom-anchor shift the highlight rects are positioned with.
+        renderer.set_selection(self.selection.as_ref(), grid.cols);
     }
 
     /// Push the current input editor state to the renderer. If the
@@ -32,7 +39,9 @@ impl App {
             self.update_display();
         }
 
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let cursor = (self.input.cursor_line(), self.input.cursor_col_in_line());
         renderer.set_input_block(self.input.buffer(), cursor);
 
@@ -58,8 +67,16 @@ impl App {
             // Compute anchor position — cursor row Y in the input bar.
             let metrics = renderer.cell_metrics();
             let cell_h = metrics.height;
-            let window_h = self.window.as_ref().map(|w| w.inner_size().height).unwrap_or(0) as f32;
-            let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+            let window_h = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().height)
+                .unwrap_or(0) as f32;
+            let scale = self
+                .window
+                .as_ref()
+                .map(|w| w.scale_factor() as f32)
+                .unwrap_or(1.0);
             let pad_y = self.config.window.padding_vertical * scale;
             let line_count = self.input.line_count();
             let block_bottom_y = window_h - pad_y - cell_h;
@@ -76,7 +93,9 @@ impl App {
     }
 
     pub(super) fn handle_redraw(&mut self) {
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         if let Err(e) = renderer.render() {
             log::error!("Render error: {}", e);
         }

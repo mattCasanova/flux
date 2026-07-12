@@ -144,6 +144,14 @@ impl TerminalState {
         self.block_parser.advance(&mut self.block_capture, bytes);
     }
 
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
     /// Scroll the display by `lines` (positive = up into history,
     /// negative = down towards the live tail). Alacritty clamps at
     /// both ends, so overshooting is a no-op.

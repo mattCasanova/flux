@@ -11,7 +11,7 @@ use etagere::size2;
 use super::region::GlyphRegion;
 use super::style::GlyphStyle;
 use super::texture::ATLAS_SIZE;
-use super::{GlyphAtlas, ASCII_RANGE};
+use super::{ASCII_RANGE, GlyphAtlas};
 
 /// Rasterize a single character in the given style and pack it into the atlas.
 /// Returns None for whitespace or unsupported glyph types (color emoji).

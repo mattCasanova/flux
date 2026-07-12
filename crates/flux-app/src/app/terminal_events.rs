@@ -15,7 +15,9 @@ impl App {
     /// Process pending PTY output through alacritty_terminal.
     pub(super) fn process_pty_output(&mut self) {
         let Some(pty) = &self.pty else { return };
-        let Some(terminal) = &mut self.terminal else { return };
+        let Some(terminal) = &mut self.terminal else {
+            return;
+        };
 
         let mut dirty = false;
 
@@ -51,6 +53,11 @@ impl App {
                 }
             }
 
+            // New output shifts what the viewport-relative selection
+            // points at — clear rather than highlight the wrong cells
+            // (F12; absolute line identity is v0.3 block-spike work).
+            self.clear_selection();
+
             // Raw-mode state can change on any PTY output (vim enters alt
             // screen on launch, fzf flips termios, etc.). Re-check before
             // rendering the next frame.
@@ -71,7 +78,9 @@ impl App {
     /// termios-only raw-mode programs that skip alt-screen are a follow-up
     /// (tracked separately).
     fn sync_raw_mode(&mut self) {
-        let Some(terminal) = &self.terminal else { return };
+        let Some(terminal) = &self.terminal else {
+            return;
+        };
         let raw = terminal.is_alt_screen();
         if raw == self.raw_mode {
             return;

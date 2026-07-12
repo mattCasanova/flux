@@ -1,7 +1,7 @@
 //! Bash shell implementation.
 
+use crate::{InjectionMethod, Shell};
 use std::path::{Path, PathBuf};
-use crate::{Shell, InjectionMethod};
 
 pub struct Bash {
     binary: PathBuf,
@@ -50,10 +50,7 @@ impl Shell for Bash {
 
     fn rc_files(&self) -> Vec<PathBuf> {
         let home = dirs::home_dir().unwrap();
-        vec![
-            home.join(".bash_profile"),
-            home.join(".bashrc"),
-        ]
+        vec![home.join(".bash_profile"), home.join(".bashrc")]
     }
 
     fn spawn_args(&self) -> Vec<String> {

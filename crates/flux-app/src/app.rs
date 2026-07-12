@@ -11,6 +11,7 @@ mod display;
 mod initialize;
 mod keyboard;
 mod layout;
+mod mouse;
 mod popup;
 mod scroll;
 mod terminal_events;
@@ -66,6 +67,11 @@ pub struct App {
     /// Fractional scroll remainder from trackpad pixel deltas — whole
     /// lines are consumed per wheel event, the rest accumulates here.
     pub(crate) scroll_accum: f32,
+    /// Click/drag tracking for mouse selection (F12).
+    pub(crate) mouse: mouse::MouseState,
+    /// Active output selection in viewport-relative grid cells. Cleared
+    /// by scrolling, new PTY output, typing, or Escape — see mouse.rs.
+    pub(crate) selection: Option<flux_types::Selection>,
 }
 
 impl App {
@@ -89,6 +95,8 @@ impl App {
             autocomplete: Autocomplete::default(),
             last_input_lines: 1,
             scroll_accum: 0.0,
+            mouse: mouse::MouseState::default(),
+            selection: None,
         }
     }
 }
@@ -142,6 +150,14 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseWheel { delta, .. } => {
                 self.handle_mouse_wheel(delta);
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.handle_mouse_moved(position);
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.handle_mouse_input(state, button);
             }
 
             _ => {}

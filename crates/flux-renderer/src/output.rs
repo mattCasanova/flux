@@ -5,7 +5,7 @@
 //! block. Handles bottom-anchor y-shift in cooked mode.
 
 use crate::atlas::GlyphStyle;
-use crate::core::{color_matches, CellInstance};
+use crate::core::{CellInstance, color_matches};
 use crate::renderer::Renderer;
 use flux_types::{CellFlags, Color};
 
@@ -31,16 +31,18 @@ impl Renderer {
         let pad_x = self.padding_x;
         let pad_y = self.padding_y;
 
-        let y_shift = if self.bottom_anchor {
+        let y_shift_rows = if self.bottom_anchor {
             let anchor_row = grid
                 .cursor
                 .map(|(_, r)| r)
                 .unwrap_or(grid.rows.saturating_sub(1));
             let last_row = grid.rows.saturating_sub(1);
-            (last_row.saturating_sub(anchor_row)) as f32 * cell_h
+            last_row.saturating_sub(anchor_row)
         } else {
-            0.0
+            0
         };
+        self.current_y_shift_rows = y_shift_rows;
+        let y_shift = y_shift_rows as f32 * cell_h;
 
         // In raw mode, sync the effective clear to whatever bg the alt-screen
         // program is using — sampled from the top-left cell, which reliably
@@ -138,7 +140,16 @@ impl Renderer {
                 } else {
                     (cell.fg, cell.bg)
                 };
-                self.render_glyph(cell.character, style, cell_x, cell_y, baseline, fg, bg, &mut instances);
+                self.render_glyph(
+                    cell.character,
+                    style,
+                    cell_x,
+                    cell_y,
+                    baseline,
+                    fg,
+                    bg,
+                    &mut instances,
+                );
             }
         }
 

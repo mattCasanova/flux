@@ -18,7 +18,8 @@ impl GpuContext {
     /// Initialize wgpu with a winit window.
     pub fn new(window: Arc<winit::window::Window>) -> Result<Self> {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let surface = instance.create_surface(window)?;
         let adapter = Self::request_adapter(&instance, &surface)?;
         let (device, queue) = Self::request_device(&adapter)?;
@@ -66,12 +67,11 @@ impl GpuContext {
     }
 
     fn request_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue)> {
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Flux GPU Device"),
                 ..Default::default()
-            },
-        ))?;
+            }))?;
 
         Ok((device, queue))
     }

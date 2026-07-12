@@ -1,7 +1,7 @@
 //! Zsh shell implementation.
 
+use crate::{InjectionMethod, Shell};
 use std::path::{Path, PathBuf};
-use crate::{Shell, InjectionMethod};
 
 pub struct Zsh {
     binary: PathBuf,

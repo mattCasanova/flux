@@ -29,23 +29,25 @@ pub(crate) fn color_matches(a: Color, b: Color) -> bool {
 
 impl Renderer {
     /// Rebuild the combined instance buffer from the persistent
-    /// output / input / popup vecs.
+    /// output / selection / input / popup vecs.
     ///
-    /// Paint order: **output → input → popup**. This is the draw
-    /// order inside a single `draw(0..4, 0..instance_count)` call,
-    /// which means later slices render on top of earlier ones.
-    /// Popups (autocomplete from F7, search overlay from F14) must
-    /// be visible over the input line and the terminal grid, so
-    /// they sit at the end. R4 wires the popup slice through the
-    /// buffer layout so F7/F14 only have to populate
-    /// `popup_instances` — no further plumbing required.
+    /// Paint order: **output → selection → input → popup**. This is
+    /// the draw order inside a single `draw(0..4, 0..instance_count)`
+    /// call, which means later slices render on top of earlier ones.
+    /// The selection tint composites over the grid but under the
+    /// input chrome; popups (autocomplete from F7, search overlay
+    /// from F14) must be visible over everything, so they sit last.
     ///
     /// Grows the GPU buffer if the combined size exceeds current
     /// capacity.
     pub(crate) fn rebuild_combined_buffer(&mut self) {
-        let total = self.output_instances.len()
-            + self.input_instances.len()
-            + self.popup_instances.len();
+        let slices = [
+            &self.output_instances,
+            &self.selection_instances,
+            &self.input_instances,
+            &self.popup_instances,
+        ];
+        let total: usize = slices.iter().map(|s| s.len()).sum();
         if total == 0 {
             self.instance_count = 0;
             return;
@@ -59,30 +61,20 @@ impl Renderer {
         }
 
         let mut offset: u64 = 0;
-        if !self.output_instances.is_empty() {
-            self.gpu.queue.write_buffer(
-                &self.instance_buffer,
-                offset,
-                bytemuck::cast_slice(&self.output_instances),
-            );
-            offset += (self.output_instances.len() * std::mem::size_of::<CellInstance>()) as u64;
-        }
-
-        if !self.input_instances.is_empty() {
-            self.gpu.queue.write_buffer(
-                &self.instance_buffer,
-                offset,
-                bytemuck::cast_slice(&self.input_instances),
-            );
-            offset += (self.input_instances.len() * std::mem::size_of::<CellInstance>()) as u64;
-        }
-
-        if !self.popup_instances.is_empty() {
-            self.gpu.queue.write_buffer(
-                &self.instance_buffer,
-                offset,
-                bytemuck::cast_slice(&self.popup_instances),
-            );
+        for slice in [
+            &self.output_instances,
+            &self.selection_instances,
+            &self.input_instances,
+            &self.popup_instances,
+        ] {
+            if !slice.is_empty() {
+                self.gpu.queue.write_buffer(
+                    &self.instance_buffer,
+                    offset,
+                    bytemuck::cast_slice(slice),
+                );
+                offset += (slice.len() * std::mem::size_of::<CellInstance>()) as u64;
+            }
         }
 
         self.instance_count = total as u32;

@@ -64,8 +64,18 @@ impl Renderer {
             position: [pad_x, divider_y + cell_h * 0.5 - divider_thickness * 0.5],
             size: [(window_w - pad_x * 2.0).max(0.0), divider_thickness],
             glyph_uv: [0.0, 0.0, 0.0, 0.0],
-            fg_color: [divider_color.r, divider_color.g, divider_color.b, divider_color.a],
-            bg_color: [divider_color.r, divider_color.g, divider_color.b, divider_color.a],
+            fg_color: [
+                divider_color.r,
+                divider_color.g,
+                divider_color.b,
+                divider_color.a,
+            ],
+            bg_color: [
+                divider_color.r,
+                divider_color.g,
+                divider_color.b,
+                divider_color.a,
+            ],
         });
 
         let prompt_color = Color::from_hex("#7aa2f7").unwrap_or_default();
@@ -84,7 +94,14 @@ impl Renderer {
                 let x = pad_x + (i as f32) * cell_w;
                 if ch != ' ' {
                     self.render_glyph(
-                        ch, style, x, line_y, baseline, prompt_color, bg_color, &mut instances,
+                        ch,
+                        style,
+                        x,
+                        line_y,
+                        baseline,
+                        prompt_color,
+                        bg_color,
+                        &mut instances,
                     );
                 }
             }
@@ -97,8 +114,18 @@ impl Renderer {
                     position: [cx, line_y],
                     size: [cell_w, cell_h],
                     glyph_uv: [0.0, 0.0, 0.0, 0.0],
-                    fg_color: [cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a],
-                    bg_color: [cursor_color.r, cursor_color.g, cursor_color.b, cursor_color.a],
+                    fg_color: [
+                        cursor_color.r,
+                        cursor_color.g,
+                        cursor_color.b,
+                        cursor_color.a,
+                    ],
+                    bg_color: [
+                        cursor_color.r,
+                        cursor_color.g,
+                        cursor_color.b,
+                        cursor_color.a,
+                    ],
                 });
             }
 

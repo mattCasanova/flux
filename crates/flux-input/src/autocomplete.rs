@@ -180,7 +180,10 @@ impl Autocomplete {
         let partial = &buffer[self.token_start..cursor];
         // Use only the part after the last `/` as the prefix filter,
         // since candidates are filenames within the resolved directory.
-        self.prefix = partial.rfind('/').map_or(partial, |i| &partial[i + 1..]).to_string();
+        self.prefix = partial
+            .rfind('/')
+            .map_or(partial, |i| &partial[i + 1..])
+            .to_string();
         self.recompute_visible();
         if self.visible.is_empty() {
             self.dismiss();
@@ -227,7 +230,10 @@ impl Autocomplete {
         if !self.active {
             return None;
         }
-        let cand = self.visible.get(self.selected).and_then(|&i| self.all_candidates.get(i))?;
+        let cand = self
+            .visible
+            .get(self.selected)
+            .and_then(|&i| self.all_candidates.get(i))?;
         let name = match cand.kind {
             CandidateKind::Directory => format!("{}/", cand.name),
             _ => cand.name.clone(),
@@ -334,7 +340,9 @@ fn list_directory(cwd: &Path, dirs_only: bool) -> io::Result<Vec<Candidate>> {
             CandidateKind::Symlink => 2,
             CandidateKind::Other => 3,
         };
-        rank(a.kind).cmp(&rank(b.kind)).then_with(|| a.name.cmp(&b.name))
+        rank(a.kind)
+            .cmp(&rank(b.kind))
+            .then_with(|| a.name.cmp(&b.name))
     });
     Ok(candidates)
 }
@@ -427,7 +435,7 @@ mod tests {
         ac.trigger(dir.path(), "cd ", 3, 3, "cd").unwrap();
         let (start, result) = ac.commit("cd ", 3).unwrap();
         assert_eq!(start, 3);
-        assert_eq!(result, "mydir/");  // raw_dir_token is "" so just the name
+        assert_eq!(result, "mydir/"); // raw_dir_token is "" so just the name
     }
 
     #[test]

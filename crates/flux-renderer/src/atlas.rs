@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use cosmic_text::{FontSystem, Metrics, SwashCache};
-use etagere::{size2, BucketedAtlasAllocator};
+use etagere::{BucketedAtlasAllocator, size2};
 
 pub(crate) const ASCII_COUNT: usize = 128;
 pub(crate) const ASCII_RANGE: std::ops::Range<u32> = 32..127;
@@ -87,8 +87,10 @@ impl GlyphAtlas {
         let texture = texture::create_atlas_texture(device);
         texture::clear_atlas_texture(queue, &texture);
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let allocator =
-            BucketedAtlasAllocator::new(size2(texture::ATLAS_SIZE as i32, texture::ATLAS_SIZE as i32));
+        let allocator = BucketedAtlasAllocator::new(size2(
+            texture::ATLAS_SIZE as i32,
+            texture::ATLAS_SIZE as i32,
+        ));
 
         let mut atlas = Self {
             texture,
@@ -113,12 +115,7 @@ impl GlyphAtlas {
     /// for anything that doesn't render (control chars, spaces, missing
     /// glyphs). Fast path (ASCII): one branch + one array access, no
     /// hashing. Slow path (Unicode): HashMap lookup with lazy rasterization.
-    pub fn lookup_char(
-        &mut self,
-        queue: &wgpu::Queue,
-        ch: char,
-        style: GlyphStyle,
-    ) -> GlyphRegion {
+    pub fn lookup_char(&mut self, queue: &wgpu::Queue, ch: char, style: GlyphStyle) -> GlyphRegion {
         let style_idx = style as usize;
         let code = ch as u32;
 

@@ -6,6 +6,9 @@
 
 use bitflags::bitflags;
 
+mod selection;
+pub use selection::{CellPos, Selection, SelectionMode};
+
 /// Platform-agnostic RGBA color.
 /// All color values are 0.0 to 1.0.
 #[derive(Debug, Copy, Clone, PartialEq)]

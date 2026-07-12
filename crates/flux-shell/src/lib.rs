@@ -10,11 +10,11 @@
 //! - [bash] — Bash
 //! - [fish] — Fish
 
-mod zsh;
 mod bash;
 mod fish;
 mod history;
 pub mod integration;
+mod zsh;
 
 use std::path::{Path, PathBuf};
 
@@ -26,10 +26,7 @@ pub enum InjectionMethod {
         source_line: String,
     },
     /// Set an environment variable
-    EnvVar {
-        key: String,
-        value: String,
-    },
+    EnvVar { key: String, value: String },
 }
 
 /// Shell abstraction — all shell-specific behavior behind one interface.

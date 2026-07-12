@@ -90,8 +90,12 @@ impl BlockCapture {
         let Some(url) = params.get(1).and_then(|b| std::str::from_utf8(b).ok()) else {
             return;
         };
-        let Some(rest) = url.strip_prefix("file://") else { return };
-        let Some(path_start) = rest.find('/') else { return };
+        let Some(rest) = url.strip_prefix("file://") else {
+            return;
+        };
+        let Some(path_start) = rest.find('/') else {
+            return;
+        };
         let encoded = &rest[path_start..];
         let decoded = percent_decode_str(encoded).decode_utf8_lossy();
         self.cwd = Some(PathBuf::from(decoded.into_owned()));

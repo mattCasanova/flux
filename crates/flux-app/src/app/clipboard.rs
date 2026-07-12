@@ -1,8 +1,8 @@
-//! System clipboard integration — paste detection and handling.
+//! System clipboard integration — copy and paste.
 //!
-//! F12 will add copy in this same module. For v0.2 the clipboard
-//! surface is just "paste the system clipboard into the editor
-//! (cooked) or into the PTY with bracketed-paste markers (raw)".
+//! Paste routes into the editor (cooked) or the PTY with
+//! bracketed-paste markers (raw). Copy pulls the active mouse
+//! selection's text out of the grid snapshot.
 
 use arboard::Clipboard;
 
@@ -22,6 +22,58 @@ impl App {
             m.super_key() && !m.control_key() && !m.alt_key()
         } else {
             m.control_key() && m.shift_key() && !m.alt_key() && !m.super_key()
+        }
+    }
+
+    /// Detect the system copy chord — Cmd+C on macOS, Ctrl+Shift+C elsewhere.
+    /// Plain Ctrl+C stays SIGINT territory on every platform.
+    pub(super) fn is_copy_shortcut(&self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        let is_c = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("c"))
+            || matches!(&event.logical_key, Key::Named(NamedKey::Copy));
+        if !is_c {
+            return false;
+        }
+        let m = self.modifiers;
+        if cfg!(target_os = "macos") {
+            m.super_key() && !m.control_key() && !m.alt_key()
+        } else {
+            m.control_key() && m.shift_key() && !m.alt_key() && !m.super_key()
+        }
+    }
+
+    /// Copy the active selection to the system clipboard. Returns true
+    /// if a selection consumed the chord (even if it held only
+    /// whitespace); false lets the caller fall through to whatever the
+    /// key would otherwise do.
+    pub(super) fn handle_copy(&mut self) -> bool {
+        let Some(sel) = self.selection else {
+            return false;
+        };
+        let Some(grid) = self.snapshot_for_selection() else {
+            return false;
+        };
+        let text = sel.text(&grid);
+        if !text.is_empty() {
+            self.set_clipboard_text(text);
+        }
+        true
+    }
+
+    fn set_clipboard_text(&mut self, text: String) {
+        if self.clipboard.is_none() {
+            match Clipboard::new() {
+                Ok(cb) => self.clipboard = Some(cb),
+                Err(e) => {
+                    log::error!("Clipboard init failed: {}", e);
+                    return;
+                }
+            }
+        }
+        if let Some(cb) = self.clipboard.as_mut()
+            && let Err(e) = cb.set_text(text)
+        {
+            log::warn!("Clipboard copy failed: {}", e);
         }
     }
 

@@ -17,9 +17,9 @@ use anyhow::Result;
 
 use crate::atlas::{self, GlyphStyle};
 use crate::core::{
-    create_bind_group, create_bind_group_layout, create_cell_pipeline, create_instance_buffer,
-    create_quad_buffer, create_sampler, create_uniform_buffer, CellInstance, GpuContext,
-    Uniforms, INITIAL_MAX_CELLS,
+    CellInstance, GpuContext, INITIAL_MAX_CELLS, Uniforms, create_bind_group,
+    create_bind_group_layout, create_cell_pipeline, create_instance_buffer, create_quad_buffer,
+    create_sampler, create_uniform_buffer,
 };
 use flux_types::Color;
 
@@ -57,9 +57,17 @@ pub struct Renderer {
     pub(crate) input_instances: Vec<CellInstance>,
     /// Instances for popup overlays (F7 autocomplete, F14 search
     /// overlay, future command palette, etc.). Paint order is
-    /// output → input → popup, so popups render on top of everything
-    /// else. Empty in R4 — no feature writes to it yet.
+    /// output → selection → input → popup, so popups render on top of
+    /// everything else.
     pub(crate) popup_instances: Vec<CellInstance>,
+    /// Translucent highlight rects for the active mouse selection
+    /// (F12). Drawn after output so the tint composites over the grid,
+    /// before input/popup so chrome stays readable.
+    pub(crate) selection_instances: Vec<CellInstance>,
+    /// Bottom-anchor shift of the last `set_grid`, in rows. Cached so
+    /// selection rendering and the app's pixel→cell mapping agree with
+    /// what's actually on screen.
+    pub(crate) current_y_shift_rows: usize,
     /// Default glyph style applied to cells with no bold/italic flags.
     /// Driven by `[font] weight = "bold"` / `style = "italic"` in the config
     /// file, so users can set a baseline weight the whole terminal inherits.
@@ -88,19 +96,13 @@ impl Renderer {
         default_style: GlyphStyle,
     ) -> Result<Self> {
         let gpu = GpuContext::new(window)?;
-        let atlas = atlas::GlyphAtlas::new(
-            &gpu.device,
-            &gpu.queue,
-            font_family,
-            font_size,
-            line_height,
-        )?;
+        let atlas =
+            atlas::GlyphAtlas::new(&gpu.device, &gpu.queue, font_family, font_size, line_height)?;
         let quad_vertex_buffer = create_quad_buffer(&gpu.device);
         let uniform_buffer = create_uniform_buffer(&gpu.device, &gpu.surface_config);
         let sampler = create_sampler(&gpu.device);
         let bind_group_layout = create_bind_group_layout(&gpu.device);
-        let pipeline =
-            create_cell_pipeline(&gpu.device, gpu.format(), &bind_group_layout);
+        let pipeline = create_cell_pipeline(&gpu.device, gpu.format(), &bind_group_layout);
         let bind_group = create_bind_group(
             &gpu.device,
             &bind_group_layout,
@@ -129,6 +131,8 @@ impl Renderer {
             output_instances: Vec::with_capacity(INITIAL_MAX_CELLS),
             input_instances: Vec::with_capacity(64),
             popup_instances: Vec::new(),
+            selection_instances: Vec::new(),
+            current_y_shift_rows: 0,
             padding_x: 0.0,
             padding_y: 0.0,
             bottom_anchor: true,
@@ -164,6 +168,13 @@ impl Renderer {
         }
     }
 
+    /// Rows of blank space above the output in bottom-anchor mode, as
+    /// of the last `set_grid`. The app's pixel→cell mapping subtracts
+    /// this so clicks land on the grid rows actually shown.
+    pub fn current_y_shift_rows(&self) -> usize {
+        self.current_y_shift_rows
+    }
+
     /// Rebuild the glyph atlas with a new font size (e.g., after scale factor change).
     /// Called only when moving between monitors with different DPI.
     pub fn rebuild_font(
@@ -193,11 +204,9 @@ impl Renderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
         let uniforms = Uniforms::ortho(width as f32, height as f32);
-        self.gpu.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[uniforms]),
-        );
+        self.gpu
+            .queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
     }
 
     pub fn set_clear_color(&mut self, color: Color) {
