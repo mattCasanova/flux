@@ -4,11 +4,12 @@
 //! implementation is selected at compile time via cfg.
 //!
 //! **Path ownership**: trait methods compute pure paths — no I/O, no
-//! side effects. The free functions at the bottom of this file
-//! (`config_dir`, `data_dir`, `state_dir`, `cache_dir`) wrap the trait
-//! methods with a `create_dir_all` call so the directory is guaranteed
-//! to exist on first access. Callers that write files into these
-//! directories no longer need to pre-create parents themselves.
+//! side effects. The free functions at the bottom of this file wrap the
+//! trait methods with a `create_dir_all` call so the directory is
+//! guaranteed to exist on first access. Named locations inside the base
+//! directories (`themes_dir`, `history_file`, `crashes_dir`, …) also
+//! live here so the on-disk layout is defined in exactly one place —
+//! no other module may hardcode a path under a Flux directory.
 //!
 //! **XDG on macOS**: we deliberately use the Linux/XDG layout
 //! (`~/.config`, `~/.local/share`, `~/.local/state`, `~/.cache`) on
@@ -19,7 +20,6 @@
 use std::path::{Path, PathBuf};
 
 /// Platform-specific behavior.
-#[allow(dead_code)] // data_dir/state_dir/cache_dir are foundation for F1/F3/F5; F5 history is first caller
 pub trait Platform {
     /// Directory for user config files (`config.toml`, themes, etc.)
     fn config_dir() -> PathBuf;
@@ -147,18 +147,14 @@ pub fn config_dir() -> PathBuf {
     dir
 }
 
-/// Get the durable data directory (history, saved sessions). F5
-/// command history is the first consumer.
-#[allow(dead_code)] // consumed by F5 history (#21)
+/// Get the durable data directory (history, saved sessions).
 pub fn data_dir() -> PathBuf {
     let dir = CurrentPlatform::data_dir();
     ensure_dir(&dir, "data");
     dir
 }
 
-/// Get the app state directory (logs, crash dumps). F3 crash dumps is
-/// the first consumer.
-#[allow(dead_code)] // consumed by F3 crash dumps + rolling logs (#48)
+/// Get the app state directory (logs, crash dumps).
 pub fn state_dir() -> PathBuf {
     let dir = CurrentPlatform::state_dir();
     ensure_dir(&dir, "state");
@@ -167,9 +163,64 @@ pub fn state_dir() -> PathBuf {
 
 /// Get the regenerable cache directory. F16 theme system is the
 /// expected first consumer (compiled theme snapshots).
-#[allow(dead_code)] // consumed by F16 theme system
 pub fn cache_dir() -> PathBuf {
     let dir = CurrentPlatform::cache_dir();
     ensure_dir(&dir, "cache");
     dir
+}
+
+// --- Named locations within the base directories (#57) ---
+//
+// All code that reads or writes a well-known file lives here, so the
+// on-disk layout is defined in exactly one place:
+//
+//   config_dir/            config.toml, themes/, shell/
+//   data_dir/              history, sessions/
+//   state_dir/             crashes/ (rolling logs land here in F3)
+//   cache_dir/             (reserved; compiled theme snapshots in F16)
+
+/// Directory for user-supplied theme TOML files.
+pub fn themes_dir() -> PathBuf {
+    let dir = config_dir().join("themes");
+    ensure_dir(&dir, "themes");
+    dir
+}
+
+/// Directory the auto-injected shell integration scripts are written to.
+pub fn shell_integration_dir() -> PathBuf {
+    let dir = config_dir().join("shell");
+    ensure_dir(&dir, "shell integration");
+    dir
+}
+
+/// Path of the command history file (the file itself is created lazily
+/// by `CommandHistory` on first append).
+pub fn history_file() -> PathBuf {
+    data_dir().join("history")
+}
+
+/// Directory for saved session state (v0.5 persistence).
+pub fn sessions_dir() -> PathBuf {
+    let dir = data_dir().join("sessions");
+    ensure_dir(&dir, "sessions");
+    dir
+}
+
+/// Directory for crash dumps (F3 writes here; rolling logs live next
+/// to it in `state_dir`).
+pub fn crashes_dir() -> PathBuf {
+    let dir = state_dir().join("crashes");
+    ensure_dir(&dir, "crashes");
+    dir
+}
+
+/// Create the full on-disk directory tree. Called once at startup so a
+/// first run leaves a complete, discoverable layout rather than dirs
+/// appearing ad hoc as features first touch them.
+pub fn ensure_layout() {
+    themes_dir();
+    shell_integration_dir();
+    sessions_dir();
+    crashes_dir();
+    cache_dir();
 }

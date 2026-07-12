@@ -13,6 +13,7 @@ use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
     env_logger::init();
+    platform::ensure_layout();
 
     let config = config::FluxConfig::load()?;
     log::info!(
@@ -25,7 +26,7 @@ fn main() -> Result<()> {
     let shell = flux_shell::detect_shell();
     log::info!("Shell: {} ({})", shell.name(), shell.binary().display());
 
-    let history_path = platform::data_dir().join("history");
+    let history_path = platform::history_file();
     let shell_history = shell.load_history();
     log::info!("Loaded {} entries from shell history", shell_history.len());
     let history = CommandHistory::load(history_path, 10_000, shell_history);

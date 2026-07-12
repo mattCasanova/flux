@@ -72,7 +72,7 @@ impl App {
         // (cwd) and OSC 133 (prompt/command lifecycle) hooks.
         let integration = shell.integration_script();
         if !integration.is_empty() {
-            let script_dir = crate::platform::config_dir().join("shell");
+            let script_dir = crate::platform::shell_integration_dir();
             let script_name = format!("flux-integration.{}", shell.name());
             let script_path = script_dir.join(&script_name);
             if let Err(e) = std::fs::write(&script_path, integration) {
@@ -98,10 +98,7 @@ impl App {
         Ok(())
     }
 
-    fn create_renderer(
-        &self,
-        window: &Arc<Window>,
-    ) -> anyhow::Result<flux_renderer::Renderer> {
+    fn create_renderer(&self, window: &Arc<Window>) -> anyhow::Result<flux_renderer::Renderer> {
         let scale_factor = window.scale_factor() as f32;
         let font_size_px = self.config.font.size * scale_factor;
 
