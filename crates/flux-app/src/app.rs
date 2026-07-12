@@ -12,6 +12,7 @@ mod initialize;
 mod keyboard;
 mod layout;
 mod popup;
+mod scroll;
 mod terminal_events;
 
 use std::sync::Arc;
@@ -62,6 +63,9 @@ pub struct App {
     /// Tracks the input bar's line count so we only recompute layout
     /// when it changes (avoids unnecessary PTY resizes).
     pub(crate) last_input_lines: usize,
+    /// Fractional scroll remainder from trackpad pixel deltas — whole
+    /// lines are consumed per wheel event, the rest accumulates here.
+    pub(crate) scroll_accum: f32,
 }
 
 impl App {
@@ -84,6 +88,7 @@ impl App {
             popup: PopupState::Hidden,
             autocomplete: Autocomplete::default(),
             last_input_lines: 1,
+            scroll_accum: 0.0,
         }
     }
 }
@@ -133,6 +138,10 @@ impl ApplicationHandler for App {
 
             WindowEvent::ModifiersChanged(new) => {
                 self.modifiers = new.state();
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.handle_mouse_wheel(delta);
             }
 
             _ => {}

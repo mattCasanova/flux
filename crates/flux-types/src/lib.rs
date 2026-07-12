@@ -107,6 +107,12 @@ pub struct TerminalGrid {
     pub rows: usize,
     /// Cursor position (col, row). None if cursor is hidden.
     pub cursor: Option<(usize, usize)>,
+    /// Scrollback offset in lines. 0 = tailing live output; positive =
+    /// the viewport is scrolled that many lines up into history. The
+    /// cells above already reflect the offset — this field exists so
+    /// consumers (selection math in F12) can map screen rows back to
+    /// absolute scrollback lines without another terminal round-trip.
+    pub display_offset: usize,
 }
 
 impl TerminalGrid {
@@ -116,6 +122,7 @@ impl TerminalGrid {
             cursor: None,
             cols,
             rows,
+            display_offset: 0,
         }
     }
 
@@ -141,6 +148,11 @@ pub struct Rect {
 
 impl Rect {
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }

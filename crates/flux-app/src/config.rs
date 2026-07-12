@@ -34,11 +34,36 @@ fn default_version() -> u32 {
 pub struct FluxConfig {
     /// Config schema version. See `CURRENT_CONFIG_VERSION`.
     #[serde(default = "default_version")]
-    #[allow(dead_code)] // consumed by F2 config migration (#54)
+    #[allow(dead_code)] // consumed by F2 config migration (#55)
     pub version: u32,
     pub font: FontConfig,
     pub window: WindowConfig,
     pub theme: ThemeConfig,
+    /// Additive section: serde-defaulted so configs written before it
+    /// existed still parse (the additive-field pattern from R2; real
+    /// migrations land in F2). Defaults here must match
+    /// resources/default-config.toml.
+    #[serde(default)]
+    pub scrollback: ScrollbackConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ScrollbackConfig {
+    /// Scrollback capacity in lines. 0 disables history entirely.
+    #[serde(default = "default_scrollback_lines")]
+    pub lines: usize,
+}
+
+fn default_scrollback_lines() -> usize {
+    10_000
+}
+
+impl Default for ScrollbackConfig {
+    fn default() -> Self {
+        Self {
+            lines: default_scrollback_lines(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -120,6 +120,9 @@ impl App {
                 if self.modifiers.shift_key() {
                     self.input.insert_newline();
                 } else {
+                    // Submitting a command returns the viewport to the
+                    // live tail — standard "typing brings you back".
+                    self.snap_to_bottom();
                     let line = self.input.take_line();
                     if let Some(pty) = &mut self.pty {
                         let _ = pty.write(line.as_bytes());
@@ -128,6 +131,14 @@ impl App {
                 }
                 self.update_input_display();
                 self.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::PageUp) => {
+                self.scroll_page(true);
+                return;
+            }
+            Key::Named(NamedKey::PageDown) => {
+                self.scroll_page(false);
                 return;
             }
             Key::Named(NamedKey::Backspace) => {
@@ -169,6 +180,11 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::ArrowUp) => {
+                // Cmd+Up scrolls the output; plain Up is editor/history.
+                if self.modifiers.super_key() {
+                    self.scroll_terminal(1);
+                    return;
+                }
                 let on_first_line = self.input.cursor_line() == 0;
                 if self.input.line_count() == 1 || on_first_line {
                     self.input.history_prev();
@@ -180,6 +196,10 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::ArrowDown) => {
+                if self.modifiers.super_key() {
+                    self.scroll_terminal(-1);
+                    return;
+                }
                 let on_last_line = self.input.cursor_line() == self.input.line_count() - 1;
                 if self.input.line_count() == 1 || on_last_line {
                     self.input.history_next();

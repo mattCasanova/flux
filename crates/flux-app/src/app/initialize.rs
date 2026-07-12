@@ -52,7 +52,7 @@ impl App {
         );
 
         // Create terminal state
-        let terminal = TerminalState::new(cols.max(1), rows.max(1));
+        let terminal = TerminalState::new(cols.max(1), rows.max(1), self.config.scrollback.lines);
 
         // Spawn the PTY with matching dimensions
         let shell = flux_shell::detect_shell();

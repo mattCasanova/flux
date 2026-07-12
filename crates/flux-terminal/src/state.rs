@@ -6,7 +6,7 @@
 use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
@@ -98,12 +98,16 @@ pub struct TerminalState {
 }
 
 impl TerminalState {
-    /// Create a new terminal state with the given dimensions.
-    pub fn new(cols: usize, rows: usize) -> Self {
+    /// Create a new terminal state with the given dimensions and
+    /// scrollback capacity in lines.
+    pub fn new(cols: usize, rows: usize, scrollback_lines: usize) -> Self {
         let (tx, rx) = mpsc::channel();
         let event_proxy = EventProxy { tx };
 
-        let config = TermConfig::default();
+        let config = TermConfig {
+            scrolling_history: scrollback_lines,
+            ..TermConfig::default()
+        };
         let dims = TermDimensions { cols, rows };
         let term = Term::new(config, &dims, event_proxy);
         let parser = vte::ansi::Processor::new();
@@ -140,6 +144,34 @@ impl TerminalState {
         self.block_parser.advance(&mut self.block_capture, bytes);
     }
 
+    /// Scroll the display by `lines` (positive = up into history,
+    /// negative = down towards the live tail). Alacritty clamps at
+    /// both ends, so overshooting is a no-op.
+    pub fn scroll_lines(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    pub fn scroll_page_up(&mut self) {
+        self.term.scroll_display(Scroll::PageUp);
+    }
+
+    pub fn scroll_page_down(&mut self) {
+        self.term.scroll_display(Scroll::PageDown);
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// Current history offset in lines. 0 = tailing live output;
+    /// positive = the user has scrolled that many lines into history.
+    /// When new output arrives while scrolled up, alacritty grows the
+    /// offset internally so the viewport doesn't jump — no gate needed
+    /// on our side.
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
     /// Drain any events from alacritty_terminal (PtyWrite, Bell, Title).
     pub fn drain_events(&self) -> Vec<TermEvent> {
         let mut events = Vec::new();
@@ -153,6 +185,10 @@ impl TerminalState {
     pub fn grid_snapshot(&self, fg_default: Color, bg_default: Color) -> TerminalGrid {
         let content = self.term.renderable_content();
         let mut grid = TerminalGrid::new(self.cols, self.rows);
+        // `renderable_content` already returns the scrolled viewport;
+        // the offset is passed along so consumers can map screen rows
+        // to absolute scrollback lines (F12 selection).
+        grid.display_offset = self.term.grid().display_offset();
 
         // Set cursor position
         let cursor_point = content.cursor.point;
@@ -174,31 +210,53 @@ impl TerminalState {
             let bg = self.convert_color(cell.bg, &bg_default);
 
             let mut flags = CellFlags::empty();
-            if cell.flags.contains(alacritty_terminal::term::cell::Flags::BOLD) {
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::BOLD)
+            {
                 flags |= CellFlags::BOLD;
             }
-            if cell.flags.contains(alacritty_terminal::term::cell::Flags::ITALIC) {
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::ITALIC)
+            {
                 flags |= CellFlags::ITALIC;
             }
-            if cell.flags.contains(alacritty_terminal::term::cell::Flags::UNDERLINE) {
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::UNDERLINE)
+            {
                 flags |= CellFlags::UNDERLINE;
             }
-            if cell.flags.contains(alacritty_terminal::term::cell::Flags::HIDDEN) {
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::HIDDEN)
+            {
                 flags |= CellFlags::HIDDEN;
             }
-            if cell.flags.contains(alacritty_terminal::term::cell::Flags::DIM_BOLD) {
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::DIM_BOLD)
+            {
                 flags |= CellFlags::DIM;
             }
-            if cell.flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR) {
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR)
+            {
                 flags |= CellFlags::WIDE_CHAR;
             }
 
-            grid.set(row, col, CellData {
-                character: cell.c,
-                fg,
-                bg,
-                flags,
-            });
+            grid.set(
+                row,
+                col,
+                CellData {
+                    character: cell.c,
+                    fg,
+                    bg,
+                    flags,
+                },
+            );
         }
 
         grid
@@ -240,17 +298,15 @@ impl TerminalState {
     }
 
     /// Convert an alacritty color to our Color type.
-    fn convert_color(&self, color: alacritty_terminal::vte::ansi::Color, _default: &Color) -> Color {
+    fn convert_color(
+        &self,
+        color: alacritty_terminal::vte::ansi::Color,
+        _default: &Color,
+    ) -> Color {
         match color {
-            alacritty_terminal::vte::ansi::Color::Named(named) => {
-                self.named_color(named)
-            }
-            alacritty_terminal::vte::ansi::Color::Spec(rgb) => {
-                Color::from_rgb(rgb.r, rgb.g, rgb.b)
-            }
-            alacritty_terminal::vte::ansi::Color::Indexed(idx) => {
-                self.indexed_color(idx)
-            }
+            alacritty_terminal::vte::ansi::Color::Named(named) => self.named_color(named),
+            alacritty_terminal::vte::ansi::Color::Spec(rgb) => Color::from_rgb(rgb.r, rgb.g, rgb.b),
+            alacritty_terminal::vte::ansi::Color::Indexed(idx) => self.indexed_color(idx),
         }
     }
 
@@ -338,11 +394,51 @@ mod tests {
     /// actually updates `cwd`.
     #[test]
     fn block_capture_runs_alongside_main_parser() {
-        let mut state = TerminalState::new(80, 24);
+        let mut state = TerminalState::new(80, 24, 1000);
         state.process_bytes(b"hello world\n");
         state.process_bytes(b"\x1b[31mred\x1b[0m\n");
         // Feed an OSC 7 sequence — the side parser should accept it
         // without panicking even though nothing reads the state yet.
         state.process_bytes(b"\x1b]7;file://localhost/tmp\x07");
+    }
+
+    #[test]
+    fn scrollback_holds_history_and_offset_tracks_scrolling() {
+        let mut state = TerminalState::new(80, 24, 1000);
+        // Push well past one screen of output.
+        for i in 0..100 {
+            state.process_bytes(format!("line {}\r\n", i).as_bytes());
+        }
+        assert_eq!(state.display_offset(), 0, "tailing by default");
+
+        state.scroll_lines(10);
+        assert_eq!(state.display_offset(), 10);
+
+        // Overshoot clamps rather than panics.
+        state.scroll_lines(100_000);
+        let clamped = state.display_offset();
+        assert!(clamped >= 10, "offset should clamp at history top");
+
+        // New output while scrolled up must NOT move the viewport:
+        // alacritty grows the offset to keep the same lines on screen.
+        state.process_bytes(b"new tail line\r\n");
+        assert_eq!(state.display_offset(), clamped + 1);
+
+        state.scroll_to_bottom();
+        assert_eq!(state.display_offset(), 0);
+
+        // The snapshot carries the offset for downstream consumers.
+        let grid = state.grid_snapshot(Color::default(), Color::default());
+        assert_eq!(grid.display_offset, 0);
+    }
+
+    #[test]
+    fn zero_scrollback_keeps_offset_pinned() {
+        let mut state = TerminalState::new(80, 24, 0);
+        for i in 0..50 {
+            state.process_bytes(format!("line {}\r\n", i).as_bytes());
+        }
+        state.scroll_lines(10);
+        assert_eq!(state.display_offset(), 0, "no history to scroll into");
     }
 }
