@@ -74,7 +74,8 @@ impl App {
                     self.autocomplete.commit(self.input.buffer(), cursor)
                 {
                     let is_dir = replacement.ends_with('/');
-                    self.input.replace_range(replace_start, cursor, &replacement);
+                    self.input
+                        .replace_range(replace_start, cursor, &replacement);
                     is_dir
                 } else {
                     false
@@ -156,13 +157,13 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::Home) => {
-                self.input.home();
+                self.input.home_line();
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::End) => {
-                self.input.end();
+                self.input.end_line();
                 self.update_input_display();
                 self.request_redraw();
                 return;
@@ -200,7 +201,9 @@ impl App {
             _ => {}
         }
 
-        let Some(text) = event.text_with_all_modifiers() else { return };
+        let Some(text) = event.text_with_all_modifiers() else {
+            return;
+        };
         if text.is_empty() {
             return;
         }
@@ -250,7 +253,10 @@ impl App {
         else {
             return;
         };
-        match self.autocomplete.trigger(&cwd, buffer, cursor, token_start, &command) {
+        match self
+            .autocomplete
+            .trigger(&cwd, buffer, cursor, token_start, &command)
+        {
             Ok(()) if self.autocomplete.active() => {
                 self.popup = PopupState::Autocomplete;
                 self.update_input_display();
