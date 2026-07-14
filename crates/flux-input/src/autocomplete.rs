@@ -222,6 +222,33 @@ impl Autocomplete {
         self.selected = self.selected.saturating_sub(1);
     }
 
+    /// Advance with wrap-around — Tab-cycling through the menu.
+    pub fn cycle_next(&mut self) {
+        if !self.active {
+            return;
+        }
+        let max = self.visible.len().min(MAX_VISIBLE);
+        if max > 0 {
+            self.selected = (self.selected + 1) % max;
+        }
+    }
+
+    /// Step backwards with wrap-around — Shift+Tab.
+    pub fn cycle_prev(&mut self) {
+        if !self.active {
+            return;
+        }
+        let max = self.visible.len().min(MAX_VISIBLE);
+        if max > 0 {
+            self.selected = (self.selected + max - 1) % max;
+        }
+    }
+
+    /// Number of candidates currently shown.
+    pub fn visible_len(&self) -> usize {
+        self.visible.len()
+    }
+
     /// Return `(replace_start, replacement)` for the selected candidate.
     /// Replaces the entire token (from `token_start`) with the raw
     /// directory prefix + candidate name. This correctly handles

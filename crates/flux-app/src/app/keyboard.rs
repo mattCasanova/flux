@@ -88,30 +88,24 @@ impl App {
                 true
             }
             Key::Named(NamedKey::Tab) => {
-                // Tab commits the selection, appends, and STOPS — no
-                // auto-reopen (Warp behavior). Tab again descends into
-                // the committed directory.
-                let cursor = self.input.cursor();
-                if let Some((replace_start, replacement)) =
-                    self.autocomplete.commit(self.input.buffer(), cursor)
-                {
-                    self.input
-                        .replace_range(replace_start, cursor, &replacement);
+                // Tab cycles through the open menu (Shift+Tab backwards)
+                // — Warp behavior. Enter is what accepts.
+                if self.modifiers.shift_key() {
+                    self.autocomplete.cycle_prev();
+                } else {
+                    self.autocomplete.cycle_next();
                 }
-                self.autocomplete.dismiss();
-                self.popup = PopupState::Hidden;
                 self.update_input_display();
                 self.request_redraw();
                 true
             }
             Key::Named(NamedKey::Enter) => {
-                // Enter ALWAYS means "run the command" — never "accept
-                // the candidate". Dismiss and fall through so the cooked
-                // handler submits the line exactly as typed.
-                self.autocomplete.dismiss();
-                self.popup = PopupState::Hidden;
-                self.update_input_display();
-                false
+                // Enter fills in the picked candidate and stops — it
+                // does NOT run the command. (The menu only exists
+                // because the user summoned it with Tab, so Enter here
+                // unambiguously means "that one".) Tab again descends.
+                self.commit_autocomplete_selection();
+                true
             }
             Key::Named(NamedKey::Escape) => {
                 self.autocomplete.dismiss();
@@ -307,7 +301,8 @@ impl App {
         }
     }
 
-    /// Summon the autocomplete popup at the cursor (Tab in cooked mode).
+    /// Summon the autocomplete popup at the cursor (Tab in cooked
+    /// mode). A single match skips the menu and completes inline.
     fn open_autocomplete(&mut self) {
         let buffer = self.input.buffer();
         let cursor = self.input.cursor();
@@ -328,15 +323,36 @@ impl App {
             .trigger(&cwd, buffer, cursor, token_start, &command)
         {
             Ok(()) if self.autocomplete.active() => {
-                self.popup = PopupState::Autocomplete;
-                self.update_input_display();
-                self.request_redraw();
+                if self.autocomplete.visible_len() == 1 {
+                    // Exactly one option — no reason to show a menu.
+                    self.commit_autocomplete_selection();
+                } else {
+                    self.popup = PopupState::Autocomplete;
+                    self.update_input_display();
+                    self.request_redraw();
+                }
             }
             Ok(()) => {}
             Err(e) => {
                 log::warn!("autocomplete trigger failed: {}", e);
             }
         }
+    }
+
+    /// Insert the selected candidate into the buffer, close the menu,
+    /// and stop (no auto-reopen — Tab again descends).
+    fn commit_autocomplete_selection(&mut self) {
+        let cursor = self.input.cursor();
+        if let Some((replace_start, replacement)) =
+            self.autocomplete.commit(self.input.buffer(), cursor)
+        {
+            self.input
+                .replace_range(replace_start, cursor, &replacement);
+        }
+        self.autocomplete.dismiss();
+        self.popup = PopupState::Hidden;
+        self.update_input_display();
+        self.request_redraw();
     }
 
     /// Raw-mode key handling — the PTY owns the keyboard.
