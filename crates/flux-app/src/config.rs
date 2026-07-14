@@ -52,6 +52,11 @@ pub struct ScrollbackConfig {
     /// Scrollback capacity in lines. 0 disables history entirely.
     #[serde(default = "default_scrollback_lines")]
     pub lines: usize,
+    /// Optional "#rrggbb" padding tint shown while scrolled up into
+    /// history — a quiet visual cue that you're not at the live tail.
+    /// Unset = padding never changes.
+    #[serde(default)]
+    pub scrolled_background: Option<String>,
 }
 
 fn default_scrollback_lines() -> usize {
@@ -62,6 +67,7 @@ impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self {
             lines: default_scrollback_lines(),
+            scrolled_background: None,
         }
     }
 }
@@ -88,6 +94,12 @@ pub struct WindowConfig {
 pub struct ThemeConfig {
     pub background: String,
     pub foreground: String,
+    /// Padding color while an alt-screen program (vim, Claude Code)
+    /// runs: "sync" adopts the program's background so its colorscheme
+    /// fills edge-to-edge (default); "theme" pins to `background`
+    /// above; any "#rrggbb" pins to that color.
+    #[serde(default)]
+    pub alt_screen_background: Option<String>,
 }
 
 impl FluxConfig {

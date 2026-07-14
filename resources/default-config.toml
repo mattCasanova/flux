@@ -53,3 +53,18 @@ foreground = "#c0caf5"
 # Scrollback capacity in lines. 0 disables history entirely.
 # Memory cost is roughly proportional (~100 bytes/line-cell row).
 lines = 10000
+
+# --- Optional keys (uncomment to override defaults) ---
+
+# [theme] alt_screen_background — padding color while a full-screen
+# program (vim, Claude Code) is running:
+#   "sync"      adopt the program's background (default; vim fills
+#               the window edge-to-edge)
+#   "theme"     keep the [theme] background above
+#   "#rrggbb"   pin to any fixed color
+# alt_screen_background = "theme"
+
+# [scrollback] scrolled_background — padding tint while scrolled up
+# into history, as a quiet "not at the live tail" cue. Any hex color;
+# leave unset for no change.
+# scrolled_background = "#2a2f45"

@@ -30,6 +30,19 @@ pub struct CellMetrics {
     pub baseline_offset: f32,
 }
 
+/// How the padding / clear color behaves while an alt-screen program
+/// owns the grid.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum AltBgPolicy {
+    /// Adopt the program's background (majority vote over the grid
+    /// perimeter) so vim et al fill the window edge-to-edge.
+    Sync,
+    /// Keep the user's theme background.
+    Theme,
+    /// Always use this fixed color.
+    Fixed(Color),
+}
+
 /// The renderer — owns all GPU state and renders frames.
 pub struct Renderer {
     pub(crate) gpu: GpuContext,
@@ -68,6 +81,11 @@ pub struct Renderer {
     /// selection rendering and the app's pixel→cell mapping agree with
     /// what's actually on screen.
     pub(crate) current_y_shift_rows: usize,
+    /// Padding behavior under alt-screen programs. See [AltBgPolicy].
+    pub(crate) alt_bg_policy: AltBgPolicy,
+    /// Optional padding tint while the viewport is scrolled into
+    /// history (cooked mode) — a "not at the live tail" cue.
+    pub(crate) scrolled_bg: Option<Color>,
     /// Default glyph style applied to cells with no bold/italic flags.
     /// Driven by `[font] weight = "bold"` / `style = "italic"` in the config
     /// file, so users can set a baseline weight the whole terminal inherits.
@@ -133,6 +151,8 @@ impl Renderer {
             popup_instances: Vec::new(),
             selection_instances: Vec::new(),
             current_y_shift_rows: 0,
+            alt_bg_policy: AltBgPolicy::Sync,
+            scrolled_bg: None,
             padding_x: 0.0,
             padding_y: 0.0,
             bottom_anchor: true,
@@ -212,5 +232,13 @@ impl Renderer {
     pub fn set_clear_color(&mut self, color: Color) {
         self.clear_color = color;
         self.effective_clear_color = color;
+    }
+
+    pub fn set_alt_bg_policy(&mut self, policy: AltBgPolicy) {
+        self.alt_bg_policy = policy;
+    }
+
+    pub fn set_scrolled_background(&mut self, color: Option<Color>) {
+        self.scrolled_bg = color;
     }
 }

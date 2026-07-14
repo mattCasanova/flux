@@ -114,6 +114,29 @@ impl App {
             renderer.set_clear_color(bg);
         }
 
+        let policy = match self.config.theme.alt_screen_background.as_deref() {
+            None | Some("sync") => flux_renderer::AltBgPolicy::Sync,
+            Some("theme") => flux_renderer::AltBgPolicy::Theme,
+            Some(hex) => match Color::from_hex(hex) {
+                Some(color) => flux_renderer::AltBgPolicy::Fixed(color),
+                None => {
+                    log::warn!(
+                        "invalid [theme] alt_screen_background {:?}; using \"sync\"",
+                        hex
+                    );
+                    flux_renderer::AltBgPolicy::Sync
+                }
+            },
+        };
+        renderer.set_alt_bg_policy(policy);
+
+        if let Some(hex) = &self.config.scrollback.scrolled_background {
+            match Color::from_hex(hex) {
+                Some(color) => renderer.set_scrolled_background(Some(color)),
+                None => log::warn!("invalid [scrollback] scrolled_background {:?}", hex),
+            }
+        }
+
         Ok(renderer)
     }
 

@@ -84,15 +84,25 @@ impl Renderer {
         self.current_y_shift_rows = y_shift_rows;
         let y_shift = y_shift_rows as f32 * cell_h;
 
-        // In raw mode, sync the effective clear to whatever bg the alt-screen
-        // program is using so its colorscheme fills the padding edge-to-edge.
-        // Majority vote over the top and bottom rows, NOT a single-cell
-        // sample: programs with non-uniform backgrounds (Claude Code tints
-        // its previous-prompt rows) would otherwise flash the padding to
-        // whatever row happened to scroll into the corner. In cooked mode,
-        // reset to the user's configured theme bg.
+        // Padding / clear color policy:
+        // - Alt screen: per `alt_bg_policy` — default syncs to the
+        //   program's background (majority vote over the grid perimeter,
+        //   NOT a single-cell sample: Claude Code tints individual rows
+        //   and a corner sample flashed the padding) so vim et al fill
+        //   the window edge-to-edge.
+        // - Cooked + scrolled into history: optional `scrolled_bg` tint
+        //   as a "not at the live tail" cue.
+        // - Otherwise: the user's theme background.
         self.effective_clear_color = if !self.bottom_anchor && grid.rows > 0 && grid.cols > 0 {
-            dominant_edge_bg(grid)
+            match self.alt_bg_policy {
+                crate::renderer::AltBgPolicy::Sync => dominant_edge_bg(grid),
+                crate::renderer::AltBgPolicy::Theme => self.clear_color,
+                crate::renderer::AltBgPolicy::Fixed(color) => color,
+            }
+        } else if grid.display_offset > 0
+            && let Some(scrolled) = self.scrolled_bg
+        {
+            scrolled
         } else {
             self.clear_color
         };
