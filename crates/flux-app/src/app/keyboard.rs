@@ -252,6 +252,16 @@ impl App {
             return;
         }
 
+        // Cmd-chords are app/window shortcuts, never text. macOS still
+        // reports the plain letter as the key's text with Cmd held, so
+        // without this guard Cmd+C (no selection), Cmd+W, Cmd+S, etc.
+        // would type their letter into the editor. Matches iTerm:
+        // unbound Cmd-chords are swallowed. (Ctrl combos are unaffected
+        // — they arrive as control codes and still reach the PTY.)
+        if self.modifiers.super_key() {
+            return;
+        }
+
         let is_control =
             text.len() == 1 && (text.as_bytes()[0] < 0x20 || text.as_bytes()[0] == 0x7f);
         if is_control {
@@ -357,9 +367,12 @@ impl App {
             if let Some(pty) = &mut self.pty {
                 let _ = pty.write(bytes);
             }
-        } else if let Some(text) = event.text_with_all_modifiers()
+        } else if !self.modifiers.super_key()
+            && let Some(text) = event.text_with_all_modifiers()
             && let Some(pty) = &mut self.pty
         {
+            // Same Cmd-chord guard as cooked mode: Cmd+letter must not
+            // leak the letter into vim / Claude / the running command.
             let _ = pty.write(text.as_bytes());
         }
 
