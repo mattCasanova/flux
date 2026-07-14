@@ -28,7 +28,7 @@ impl App {
                     dirty = true;
                 }
                 PtyEvent::Exited => {
-                    log::info!("Shell exited");
+                    self.shell_exited = true;
                 }
             }
         }

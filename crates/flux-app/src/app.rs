@@ -67,6 +67,10 @@ pub struct App {
     /// Fractional scroll remainder from trackpad pixel deltas — whole
     /// lines are consumed per wheel event, the rest accumulates here.
     pub(crate) scroll_accum: f32,
+    /// Set when the shell process exits (PTY EOF) — the event loop
+    /// shuts the app down on the next wake. "exit closes the window,"
+    /// like every terminal.
+    pub(crate) shell_exited: bool,
     /// Click/drag tracking for mouse selection (F12).
     pub(crate) mouse: mouse::MouseState,
     /// Active output selection in viewport-relative grid cells. Cleared
@@ -95,6 +99,7 @@ impl App {
             autocomplete: Autocomplete::default(),
             last_input_lines: 1,
             scroll_accum: 0.0,
+            shell_exited: false,
             mouse: mouse::MouseState::default(),
             selection: None,
         }
@@ -164,9 +169,14 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
         // PTY output arrived — process and redraw
         self.process_pty_output();
+        if self.shell_exited {
+            log::info!("Shell exited — closing window");
+            event_loop.exit();
+            return;
+        }
         self.request_redraw();
     }
 }
