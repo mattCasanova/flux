@@ -87,29 +87,31 @@ impl App {
                 self.request_redraw();
                 true
             }
-            Key::Named(NamedKey::Tab) | Key::Named(NamedKey::Enter) => {
+            Key::Named(NamedKey::Tab) => {
+                // Tab commits the selection, appends, and STOPS — no
+                // auto-reopen (Warp behavior). Tab again descends into
+                // the committed directory.
                 let cursor = self.input.cursor();
-                let committed_dir = if let Some((replace_start, replacement)) =
+                if let Some((replace_start, replacement)) =
                     self.autocomplete.commit(self.input.buffer(), cursor)
                 {
-                    let is_dir = replacement.ends_with('/');
                     self.input
                         .replace_range(replace_start, cursor, &replacement);
-                    is_dir
-                } else {
-                    false
-                };
+                }
                 self.autocomplete.dismiss();
                 self.popup = PopupState::Hidden;
                 self.update_input_display();
                 self.request_redraw();
-                // Only re-trigger if we committed a directory — chaining
-                // into subdirectories. Files are a leaf; the user hits
-                // Enter again to run the command.
-                if committed_dir {
-                    self.maybe_update_autocomplete();
-                }
                 true
+            }
+            Key::Named(NamedKey::Enter) => {
+                // Enter ALWAYS means "run the command" — never "accept
+                // the candidate". Dismiss and fall through so the cooked
+                // handler submits the line exactly as typed.
+                self.autocomplete.dismiss();
+                self.popup = PopupState::Hidden;
+                self.update_input_display();
+                false
             }
             Key::Named(NamedKey::Escape) => {
                 self.autocomplete.dismiss();
@@ -151,6 +153,14 @@ impl App {
                 }
                 self.update_input_display();
                 self.request_redraw();
+                return;
+            }
+            // Tab summons the autocomplete popup (when it's open, the
+            // popup intercept handles Tab as "commit"). Always
+            // swallowed in cooked mode — sending \t to the shell would
+            // trigger the shell's own completion under our editor.
+            Key::Named(NamedKey::Tab) => {
+                self.open_autocomplete();
                 return;
             }
             Key::Named(NamedKey::PageUp) => {
@@ -283,21 +293,25 @@ impl App {
         self.request_redraw();
     }
 
-    /// Check if autocomplete should trigger or update after a keystroke.
+    /// Re-filter the popup after an edit — only when it's already open.
+    /// The popup never opens itself; Tab summons it (Warp model: typing
+    /// is quiet, Enter always submits, completion is explicit).
     pub(super) fn maybe_update_autocomplete(&mut self) {
-        let buffer = self.input.buffer();
-        let cursor = self.input.cursor();
-
-        // Popup already open — update the filter.
         if matches!(self.popup, PopupState::Autocomplete) && self.autocomplete.active() {
+            let buffer = self.input.buffer();
+            let cursor = self.input.cursor();
             if !self.autocomplete.update_filter(buffer, cursor) {
                 self.popup = PopupState::Hidden;
             }
             self.update_input_display();
-            return;
         }
+    }
 
-        // Check if we should trigger.
+    /// Summon the autocomplete popup at the cursor (Tab in cooked mode).
+    fn open_autocomplete(&mut self) {
+        let buffer = self.input.buffer();
+        let cursor = self.input.cursor();
+
         let Some((token_start, command)) = Autocomplete::should_trigger(buffer, cursor) else {
             return;
         };
@@ -316,6 +330,7 @@ impl App {
             Ok(()) if self.autocomplete.active() => {
                 self.popup = PopupState::Autocomplete;
                 self.update_input_display();
+                self.request_redraw();
             }
             Ok(()) => {}
             Err(e) => {
