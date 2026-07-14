@@ -1,8 +1,11 @@
 //! Configuration loading.
 //!
-//! On first run, generates a default config from resources/default-config.toml.
-//! All defaults come from that file — nothing is duplicated in code.
-//! If the config is corrupted or missing fields, back it up and reset.
+//! On first run, generates a default config from resources/default-config.toml,
+//! which spells out the complete theme so every knob is discoverable.
+//! Optional keys additionally have code-side defaults (ResolvedTheme,
+//! ScrollbackConfig) so configs written before those keys existed keep
+//! parsing — keep the two in sync when either changes.
+//! If the config is corrupted or missing required fields, back it up and reset.
 
 use anyhow::Result;
 use serde::Deserialize;

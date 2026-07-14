@@ -43,35 +43,53 @@ padding_horizontal = 10
 padding_vertical = 10
 
 [theme]
+# The complete color theme, spelled out so every knob is visible.
+# This is Tokyo Night Storm — change any value to make it yours, or
+# delete a key to fall back to the same built-in default.
+# (Named theme files in ~/.config/flux/themes/ are a future release;
+# that folder is scaffolding for now.)
+
 # Terminal background color.
 background = "#24283b"
 
 # Default text (foreground) color.
 foreground = "#c0caf5"
 
+# Cursor color. Defaults to foreground when omitted.
+cursor = "#c0caf5"
+
+# ANSI colors 0-7.
+black   = "#414868"
+red     = "#f7768e"
+green   = "#73daca"
+yellow  = "#e0af68"
+blue    = "#7aa2f7"
+magenta = "#bb9af7"
+cyan    = "#7dcfff"
+white   = "#c0caf5"
+
+# Bright variants (ANSI 8-15).
+bright_black   = "#6a7099"
+bright_red     = "#ff9999"
+bright_green   = "#b9e986"
+bright_yellow  = "#f4e070"
+bright_blue    = "#9cc1ff"
+bright_magenta = "#d6b4ff"
+bright_cyan    = "#a3e6ff"
+bright_white   = "#e0e6ff"
+
+# Padding color while a full-screen program (vim, Claude Code) runs:
+#   "sync"      adopt the program's background (default; vim fills the
+#               window edge-to-edge)
+#   "theme"     keep the background above, always
+#   "#rrggbb"   pin to any fixed color
+# alt_screen_background = "sync"
+
 [scrollback]
 # Scrollback capacity in lines. 0 disables history entirely.
 # Memory cost is roughly proportional (~100 bytes/line-cell row).
 lines = 10000
 
-# --- Optional keys (uncomment to override defaults) ---
-
-# [theme] alt_screen_background — padding color while a full-screen
-# program (vim, Claude Code) is running:
-#   "sync"      adopt the program's background (default; vim fills
-#               the window edge-to-edge)
-#   "theme"     keep the [theme] background above
-#   "#rrggbb"   pin to any fixed color
-# alt_screen_background = "theme"
-
-# [scrollback] scrolled_background — padding tint while scrolled up
-# into history, as a quiet "not at the live tail" cue. Any hex color;
-# leave unset for no change.
+# Padding tint while scrolled up into history — a quiet "not at the
+# live tail" cue. Any hex color; leave unset for no change.
 # scrolled_background = "#2a2f45"
-
-# [theme] ANSI palette overrides — unset keys keep the built-in
-# Tokyo Night Storm palette. Uncomment under [theme] to customize:
-#   black / red / green / yellow / blue / magenta / cyan / white
-#   bright_black / ... / bright_white
-#   cursor (defaults to foreground)
-# red = "#f7768e"
