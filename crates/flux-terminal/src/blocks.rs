@@ -38,7 +38,7 @@ use alacritty_terminal::vte::Perform;
 use percent_encoding::percent_decode_str;
 
 /// Current phase of the prompt/command lifecycle tracked by OSC 133.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ShellPhase {
     /// Prompt is being displayed, waiting for user input.
     Prompt,
@@ -47,6 +47,7 @@ pub(crate) enum ShellPhase {
     /// Command is executing.
     Executing,
     /// Idle — no shell integration or before first prompt.
+    #[default]
     Idle,
 }
 
@@ -59,12 +60,6 @@ pub(crate) struct BlockCapture {
     phase: Option<ShellPhase>,
     /// Exit code of the last finished command from OSC 133;D.
     last_exit_code: Option<i32>,
-}
-
-impl Default for ShellPhase {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl BlockCapture {

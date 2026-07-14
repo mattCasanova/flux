@@ -259,10 +259,10 @@ fn expand_shell_vars(input: &str) -> String {
     let mut result = input.to_string();
 
     // Expand ~ at the start to the home directory.
-    if result.starts_with('~') {
-        if let Some(home) = dirs::home_dir() {
-            result = result.replacen('~', &home.to_string_lossy(), 1);
-        }
+    if result.starts_with('~')
+        && let Some(home) = dirs::home_dir()
+    {
+        result = result.replacen('~', &home.to_string_lossy(), 1);
     }
 
     // Expand $VAR and ${VAR} patterns.

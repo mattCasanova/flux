@@ -31,7 +31,7 @@ impl Shell for Zsh {
     fn parse_history_entry(&self, raw_line: &str) -> Option<String> {
         // Zsh extended history format: ": 1712700000:0;ls -la"
         if raw_line.starts_with(": ") {
-            raw_line.splitn(2, ';').nth(1).map(|s| s.to_string())
+            raw_line.split_once(';').map(|x| x.1).map(|s| s.to_string())
         } else {
             Some(raw_line.to_string())
         }

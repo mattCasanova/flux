@@ -32,11 +32,7 @@ impl Shell for Fish {
         // Fish history format:
         // - cmd: ls -la
         //   when: 1712700000
-        if let Some(cmd) = raw_line.strip_prefix("- cmd: ") {
-            Some(cmd.to_string())
-        } else {
-            None
-        }
+        raw_line.strip_prefix("- cmd: ").map(|cmd| cmd.to_string())
     }
 
     fn integration_script(&self) -> &str {

@@ -28,6 +28,12 @@ pub struct KeybindingManager {
     // - Platform-aware: Cmd on macOS, Ctrl on Linux
 }
 
+impl Default for KeybindingManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeybindingManager {
     pub fn new() -> Self {
         Self {}
