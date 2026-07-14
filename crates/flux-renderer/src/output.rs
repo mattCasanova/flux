@@ -7,7 +7,47 @@
 use crate::atlas::GlyphStyle;
 use crate::core::{CellInstance, color_matches};
 use crate::renderer::Renderer;
-use flux_types::{CellFlags, Color};
+use flux_types::{CellFlags, Color, TerminalGrid};
+
+/// The most common cell background along the grid perimeter — what an
+/// alt-screen program "means" by its background color, robust against
+/// individually tinted rows (statuslines, highlighted entries, Claude
+/// Code's prompt rows). The full perimeter (not just top/bottom rows)
+/// keeps a single full-width statusline from tying the vote.
+fn dominant_edge_bg(grid: &TerminalGrid) -> Color {
+    let mut counts: std::collections::HashMap<[u8; 4], (usize, Color)> = Default::default();
+    let mut tally = |bg: Color| {
+        let key = [
+            (bg.r * 255.0) as u8,
+            (bg.g * 255.0) as u8,
+            (bg.b * 255.0) as u8,
+            (bg.a * 255.0) as u8,
+        ];
+        counts.entry(key).or_insert((0, bg)).0 += 1;
+    };
+
+    let last_row = grid.rows - 1;
+    let last_col = grid.cols - 1;
+    for col in 0..grid.cols {
+        tally(grid.get(0, col).bg);
+        if last_row > 0 {
+            tally(grid.get(last_row, col).bg);
+        }
+    }
+    // Side columns, excluding the corners already counted above.
+    for row in 1..last_row.max(1) {
+        tally(grid.get(row, 0).bg);
+        if last_col > 0 {
+            tally(grid.get(row, last_col).bg);
+        }
+    }
+
+    counts
+        .into_values()
+        .max_by_key(|(count, _)| *count)
+        .map(|(_, color)| color)
+        .unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0))
+}
 
 impl Renderer {
     /// Render a terminal grid — each cell at its grid position.
@@ -45,11 +85,14 @@ impl Renderer {
         let y_shift = y_shift_rows as f32 * cell_h;
 
         // In raw mode, sync the effective clear to whatever bg the alt-screen
-        // program is using — sampled from the top-left cell, which reliably
-        // carries the Normal highlight bg for vim, nano, less, etc. In cooked
-        // mode, reset to the user's configured theme bg.
+        // program is using so its colorscheme fills the padding edge-to-edge.
+        // Majority vote over the top and bottom rows, NOT a single-cell
+        // sample: programs with non-uniform backgrounds (Claude Code tints
+        // its previous-prompt rows) would otherwise flash the padding to
+        // whatever row happened to scroll into the corner. In cooked mode,
+        // reset to the user's configured theme bg.
         self.effective_clear_color = if !self.bottom_anchor && grid.rows > 0 && grid.cols > 0 {
-            grid.get(0, 0).bg
+            dominant_edge_bg(grid)
         } else {
             self.clear_color
         };
@@ -155,5 +198,76 @@ impl Renderer {
 
         self.output_instances = instances;
         self.rebuild_combined_buffer();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flux_types::CellData;
+
+    fn grid_with_bgs(rows: usize, cols: usize, default: Color) -> TerminalGrid {
+        let mut grid = TerminalGrid::new(cols, rows);
+        for r in 0..rows {
+            for c in 0..cols {
+                grid.set(
+                    r,
+                    c,
+                    CellData {
+                        bg: default,
+                        ..CellData::default()
+                    },
+                );
+            }
+        }
+        grid
+    }
+
+    #[test]
+    fn uniform_background_wins() {
+        let bg = Color::new(0.1, 0.2, 0.3, 1.0);
+        let grid = grid_with_bgs(24, 80, bg);
+        assert_eq!(dominant_edge_bg(&grid), bg);
+    }
+
+    #[test]
+    fn single_tinted_corner_does_not_flip_the_padding() {
+        let bg = Color::new(0.1, 0.2, 0.3, 1.0);
+        let tint = Color::new(0.4, 0.3, 0.2, 1.0);
+        let mut grid = grid_with_bgs(24, 80, bg);
+        // A tinted element scrolled into the top-left corner (the old
+        // single-cell sample would have adopted it).
+        for c in 0..10 {
+            grid.set(
+                0,
+                c,
+                CellData {
+                    bg: tint,
+                    ..CellData::default()
+                },
+            );
+        }
+        assert_eq!(dominant_edge_bg(&grid), bg);
+    }
+
+    #[test]
+    fn statusline_bottom_row_does_not_outvote_normal_bg() {
+        let bg = Color::new(0.1, 0.2, 0.3, 1.0);
+        let status = Color::new(0.5, 0.5, 0.5, 1.0);
+        let mut grid = grid_with_bgs(24, 80, bg);
+        // vim-style full-width statusline on the bottom row: 80 status
+        // cells vs 80 top-row cells + 44 side-column cells of Normal —
+        // Normal must win decisively.
+        for c in 0..80 {
+            grid.set(
+                23,
+                c,
+                CellData {
+                    bg: status,
+                    ..CellData::default()
+                },
+            );
+        }
+        assert_eq!(dominant_edge_bg(&grid), bg);
     }
 }
