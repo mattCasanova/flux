@@ -53,15 +53,20 @@ impl App {
                 }
             }
 
-            // New output shifts what the viewport-relative selection
-            // points at — clear rather than highlight the wrong cells
-            // (F12; absolute line identity is v0.3 block-spike work).
-            self.clear_selection();
-
             // Raw-mode state can change on any PTY output (vim enters alt
             // screen on launch, fzf flips termios, etc.). Re-check before
             // rendering the next frame.
             self.sync_raw_mode();
+
+            // Cooked mode: new output shifts what the viewport-relative
+            // selection points at — clear rather than highlight the wrong
+            // cells (absolute line identity is v0.3 block-spike work).
+            // Raw mode keeps the selection: alt-screen programs repaint
+            // constantly and clearing would make copying from them
+            // impossible; their content is stationary between repaints.
+            if !self.raw_mode {
+                self.clear_selection();
+            }
             self.update_display();
         }
     }
@@ -87,6 +92,11 @@ impl App {
         }
         self.raw_mode = raw;
         log::info!("Raw mode: {}", raw);
+
+        // The grid contents are about to be swapped wholesale (entering
+        // or leaving the alt screen) — any selection now points at the
+        // wrong content.
+        self.clear_selection();
 
         if let Some(renderer) = &mut self.renderer {
             renderer.set_bottom_anchor(!raw);

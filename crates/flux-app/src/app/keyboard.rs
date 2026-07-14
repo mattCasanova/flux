@@ -41,12 +41,27 @@ impl App {
             return;
         }
 
-        if self.raw_mode {
+        if self.pty_owns_keyboard() {
             self.handle_keyboard_raw(event);
             return;
         }
 
         self.handle_keyboard_cooked(event);
+    }
+
+    /// True when keystrokes belong to the PTY rather than the Flux
+    /// editor: alt-screen programs (vim, Claude Code), and any command
+    /// still executing per OSC 133 phase (sudo password prompts, REPLs,
+    /// and interactive programs that never touch the alt screen). At the
+    /// shell prompt — integration phase Prompt/Input, or no integration
+    /// at all — the Flux editor owns the keyboard.
+    fn pty_owns_keyboard(&self) -> bool {
+        self.raw_mode
+            || self
+                .terminal
+                .as_ref()
+                .map(|t| t.is_executing())
+                .unwrap_or(false)
     }
 
     /// Handle a key while the autocomplete popup is active. Returns
@@ -303,6 +318,11 @@ impl App {
     fn handle_keyboard_raw(&mut self, event: winit::event::KeyEvent) {
         use winit::keyboard::{Key, NamedKey};
         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+
+        // Typing returns a scrolled viewport to the live tail, same as
+        // submitting does in cooked mode. No-op on the alt screen where
+        // the offset is always 0.
+        self.snap_to_bottom();
 
         let bytes: Option<&[u8]> = match &event.logical_key {
             Key::Named(NamedKey::Enter) => Some(b"\r"),

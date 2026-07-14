@@ -66,9 +66,18 @@ impl App {
         if !matches!(button, MouseButton::Left) {
             return;
         }
-        // Raw mode: no local selection; forwarding xterm mouse events
-        // to the PTY is future work.
-        if self.raw_mode {
+        // Local selection works everywhere EXCEPT when the program has
+        // requested mouse reporting for itself (vim `mouse=a`, htop) —
+        // forwarding the xterm mouse protocol to those is future work.
+        // Alt-screen programs that ignore the mouse (less, Claude Code)
+        // keep normal select-and-copy.
+        if self.raw_mode
+            && self
+                .terminal
+                .as_ref()
+                .map(|t| t.wants_mouse_reporting())
+                .unwrap_or(true)
+        {
             return;
         }
 

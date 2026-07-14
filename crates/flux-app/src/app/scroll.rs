@@ -13,10 +13,6 @@ use super::App;
 
 impl App {
     pub(super) fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        if self.raw_mode {
-            return;
-        }
-
         let cell_h = self
             .renderer
             .as_ref()
@@ -33,10 +29,38 @@ impl App {
         };
         self.scroll_accum += lines;
         let whole = self.scroll_accum.trunc();
-        if whole != 0.0 {
-            self.scroll_accum -= whole;
-            self.scroll_terminal(whole as i32);
+        if whole == 0.0 {
+            return;
         }
+        self.scroll_accum -= whole;
+        let n = whole as i32;
+
+        if self.raw_mode {
+            // Alt screen has no scrollback. The standard behaviors:
+            // programs that requested mouse reporting get the events
+            // themselves (protocol forwarding is future work — no-op
+            // for now); otherwise translate the wheel into arrow keys
+            // (DECSET 1007 alternate-scroll) so vim / less / Claude
+            // scroll their own content.
+            let Some(term) = &self.terminal else { return };
+            if term.wants_mouse_reporting() || !term.alternate_scroll() {
+                return;
+            }
+            let seq: &[u8] = match (term.app_cursor_keys(), n > 0) {
+                (true, true) => b"\x1bOA",
+                (true, false) => b"\x1bOB",
+                (false, true) => b"\x1b[A",
+                (false, false) => b"\x1b[B",
+            };
+            if let Some(pty) = &mut self.pty {
+                for _ in 0..n.unsigned_abs() {
+                    let _ = pty.write(seq);
+                }
+            }
+            return;
+        }
+
+        self.scroll_terminal(n);
     }
 
     /// Scroll the output viewport by `lines` (positive = into history)

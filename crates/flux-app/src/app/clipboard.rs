@@ -77,17 +77,24 @@ impl App {
         }
     }
 
-    /// Read the system clipboard and route the text into the editor (cooked
-    /// mode) or the PTY (raw mode). In raw mode we wrap the payload in the
-    /// bracketed-paste markers when the child program has enabled that mode,
-    /// so vim et al can distinguish a paste from typed input.
+    /// Read the system clipboard and route the text into the editor (when
+    /// the editor owns the keyboard) or the PTY (alt-screen programs and
+    /// executing commands). On the PTY path we wrap the payload in the
+    /// bracketed-paste markers when the child program has enabled that
+    /// mode, so vim et al can distinguish a paste from typed input.
     pub(super) fn handle_paste(&mut self) {
         let text = match self.clipboard_text() {
             Some(t) if !t.is_empty() => t,
             _ => return,
         };
 
-        if self.raw_mode {
+        let pty_owns = self.raw_mode
+            || self
+                .terminal
+                .as_ref()
+                .map(|t| t.is_executing())
+                .unwrap_or(false);
+        if pty_owns {
             let bracketed = self
                 .terminal
                 .as_ref()
