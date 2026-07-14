@@ -26,7 +26,13 @@ pub(crate) struct MouseState {
     last_click_pos: Option<PhysicalPosition<f64>>,
     click_count: u32,
     is_dragging: bool,
-    last_cursor_pos: PhysicalPosition<f64>,
+    pub(super) last_cursor_pos: PhysicalPosition<f64>,
+    /// Left button is held and events are being forwarded to the PTY
+    /// (program requested mouse reporting).
+    forwarding_drag: bool,
+    /// Last cell a forwarded drag event was sent for — dedupes the
+    /// sub-cell motion spam.
+    last_forwarded_cell: Option<CellPos>,
 }
 
 impl Default for MouseState {
@@ -37,13 +43,64 @@ impl Default for MouseState {
             click_count: 0,
             is_dragging: false,
             last_cursor_pos: PhysicalPosition::new(0.0, 0.0),
+            forwarding_drag: false,
+            last_forwarded_cell: None,
         }
     }
+}
+
+/// xterm mouse protocol button codes.
+pub(super) const MOUSE_BTN_LEFT: u8 = 0;
+pub(super) const MOUSE_BTN_WHEEL_UP: u8 = 64;
+pub(super) const MOUSE_BTN_WHEEL_DOWN: u8 = 65;
+const MOUSE_DRAG_FLAG: u8 = 32;
+
+/// SGR encoding (DECSET 1006): `\x1b[<btn;col;row(M|m)`, 1-based cells.
+fn encode_sgr(button: u8, cell: CellPos, pressed: bool) -> Vec<u8> {
+    format!(
+        "\x1b[<{};{};{}{}",
+        button,
+        cell.col + 1,
+        cell.row + 1,
+        if pressed { 'M' } else { 'm' }
+    )
+    .into_bytes()
+}
+
+/// Legacy X10 encoding: `\x1b[M` + three bytes offset by 32. Cells past
+/// 223 can't be encoded — return None and drop the event.
+fn encode_legacy(button: u8, cell: CellPos, pressed: bool) -> Option<Vec<u8>> {
+    // Legacy has no per-button release — releases are always button 3.
+    let b = if pressed { button } else { 3 };
+    let cx = cell.col + 1 + 32;
+    let cy = cell.row + 1 + 32;
+    if cx > 255 || cy > 255 {
+        return None;
+    }
+    Some(vec![0x1b, b'[', b'M', 32 + b, cx as u8, cy as u8])
 }
 
 impl App {
     pub(super) fn handle_mouse_moved(&mut self, pos: PhysicalPosition<f64>) {
         self.mouse.last_cursor_pos = pos;
+
+        // Forwarded drag: stream cell-granular drag events to the
+        // program while the left button is held, if it asked for them.
+        if self.mouse.forwarding_drag {
+            let reports_drag = self
+                .terminal
+                .as_ref()
+                .map(|t| t.reports_mouse_drag())
+                .unwrap_or(false);
+            if reports_drag
+                && let Some(cell) = self.pixel_to_cell(pos)
+                && self.mouse.last_forwarded_cell != Some(cell)
+            {
+                self.mouse.last_forwarded_cell = Some(cell);
+                self.forward_mouse(MOUSE_BTN_LEFT | MOUSE_DRAG_FLAG, cell, true);
+            }
+            return;
+        }
 
         if !self.mouse.is_dragging || self.selection.is_none() {
             return;
@@ -66,18 +123,34 @@ impl App {
         if !matches!(button, MouseButton::Left) {
             return;
         }
-        // Local selection works everywhere EXCEPT when the program has
-        // requested mouse reporting for itself (vim `mouse=a`, htop) —
-        // forwarding the xterm mouse protocol to those is future work.
-        // Alt-screen programs that ignore the mouse (less, Claude Code)
-        // keep normal select-and-copy.
-        if self.raw_mode
+
+        // When the program requested mouse reporting (vim `mouse=a`,
+        // htop, Claude Code), clicks belong to it — encode and forward.
+        // Shift is the xterm-standard bypass: Shift+drag always makes a
+        // local Flux selection regardless of what the program wants.
+        let program_owns_mouse = self.raw_mode
+            && !self.modifiers.shift_key()
             && self
                 .terminal
                 .as_ref()
                 .map(|t| t.wants_mouse_reporting())
-                .unwrap_or(true)
-        {
+                .unwrap_or(false);
+        if program_owns_mouse {
+            let Some(cell) = self.pixel_to_cell(self.mouse.last_cursor_pos) else {
+                return;
+            };
+            match state {
+                ElementState::Pressed => {
+                    self.mouse.forwarding_drag = true;
+                    self.mouse.last_forwarded_cell = Some(cell);
+                    self.forward_mouse(MOUSE_BTN_LEFT, cell, true);
+                }
+                ElementState::Released => {
+                    self.mouse.forwarding_drag = false;
+                    self.mouse.last_forwarded_cell = None;
+                    self.forward_mouse(MOUSE_BTN_LEFT, cell, false);
+                }
+            }
             return;
         }
 
@@ -94,6 +167,26 @@ impl App {
                     self.clear_selection();
                 }
             }
+        }
+    }
+
+    /// Encode one mouse event in the program's requested protocol and
+    /// write it to the PTY.
+    pub(super) fn forward_mouse(&mut self, button: u8, cell: CellPos, pressed: bool) {
+        let sgr = self
+            .terminal
+            .as_ref()
+            .map(|t| t.sgr_mouse())
+            .unwrap_or(false);
+        let bytes = if sgr {
+            Some(encode_sgr(button, cell, pressed))
+        } else {
+            encode_legacy(button, cell, pressed)
+        };
+        if let Some(bytes) = bytes
+            && let Some(pty) = &mut self.pty
+        {
+            let _ = pty.write(&bytes);
         }
     }
 
@@ -167,7 +260,7 @@ impl App {
     /// Map a physical pixel position to an output-grid cell. Returns
     /// `None` outside the output area (padding, bottom-anchor blank
     /// space above the output, or the input bar below it).
-    fn pixel_to_cell(&self, pos: PhysicalPosition<f64>) -> Option<CellPos> {
+    pub(super) fn pixel_to_cell(&self, pos: PhysicalPosition<f64>) -> Option<CellPos> {
         let renderer = self.renderer.as_ref()?;
         let term = self.terminal.as_ref()?;
         let metrics = renderer.cell_metrics();
@@ -221,5 +314,48 @@ impl App {
             self.refresh_selection_render();
             self.request_redraw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sgr_press_release_and_wheel() {
+        let cell = CellPos { col: 4, row: 9 };
+        assert_eq!(
+            encode_sgr(MOUSE_BTN_LEFT, cell, true),
+            b"\x1b[<0;5;10M".to_vec()
+        );
+        assert_eq!(
+            encode_sgr(MOUSE_BTN_LEFT, cell, false),
+            b"\x1b[<0;5;10m".to_vec()
+        );
+        assert_eq!(
+            encode_sgr(MOUSE_BTN_WHEEL_UP, cell, true),
+            b"\x1b[<64;5;10M".to_vec()
+        );
+    }
+
+    #[test]
+    fn legacy_encoding_offsets_by_32() {
+        let cell = CellPos { col: 0, row: 0 };
+        // press left: btn 32+0, col 33, row 33
+        assert_eq!(
+            encode_legacy(MOUSE_BTN_LEFT, cell, true),
+            Some(vec![0x1b, b'[', b'M', 32, 33, 33])
+        );
+        // release is always button 3 in legacy
+        assert_eq!(
+            encode_legacy(MOUSE_BTN_LEFT, cell, false),
+            Some(vec![0x1b, b'[', b'M', 35, 33, 33])
+        );
+    }
+
+    #[test]
+    fn legacy_encoding_drops_far_cells() {
+        let cell = CellPos { col: 300, row: 0 };
+        assert_eq!(encode_legacy(MOUSE_BTN_LEFT, cell, true), None);
     }
 }

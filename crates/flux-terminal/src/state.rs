@@ -319,6 +319,21 @@ impl TerminalState {
         self.term.mode().contains(TermMode::ALTERNATE_SCROLL)
     }
 
+    /// True when the program requested the SGR mouse encoding
+    /// (DECSET 1006) — modern programs all do; the legacy `\x1b[M`
+    /// byte encoding is the fallback.
+    pub fn sgr_mouse(&self) -> bool {
+        self.term.mode().contains(TermMode::SGR_MOUSE)
+    }
+
+    /// True when the program wants drag events while a button is held
+    /// (DECSET 1002 button-event or 1003 any-event tracking).
+    pub fn reports_mouse_drag(&self) -> bool {
+        self.term
+            .mode()
+            .intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+    }
+
     /// True when the application cursor-keys mode is active (DECCKM) —
     /// arrow keys must then be encoded as `\x1bOA`-style sequences.
     pub fn app_cursor_keys(&self) -> bool {

@@ -324,17 +324,29 @@ impl App {
         // the offset is always 0.
         self.snap_to_bottom();
 
+        // DECCKM (application cursor keys): arrows/Home/End switch from
+        // CSI (`\x1b[A`) to SS3 (`\x1bOA`) encoding. vim, less, and most
+        // TUIs set it; sending the wrong form breaks arrow handling in
+        // stricter programs.
+        let app_cursor = self
+            .terminal
+            .as_ref()
+            .map(|t| t.app_cursor_keys())
+            .unwrap_or(false);
+
         let bytes: Option<&[u8]> = match &event.logical_key {
             Key::Named(NamedKey::Enter) => Some(b"\r"),
             Key::Named(NamedKey::Backspace) => Some(b"\x7f"),
             Key::Named(NamedKey::Tab) => Some(b"\t"),
             Key::Named(NamedKey::Escape) => Some(b"\x1b"),
-            Key::Named(NamedKey::ArrowUp) => Some(b"\x1b[A"),
-            Key::Named(NamedKey::ArrowDown) => Some(b"\x1b[B"),
-            Key::Named(NamedKey::ArrowRight) => Some(b"\x1b[C"),
-            Key::Named(NamedKey::ArrowLeft) => Some(b"\x1b[D"),
-            Key::Named(NamedKey::Home) => Some(b"\x1b[H"),
-            Key::Named(NamedKey::End) => Some(b"\x1b[F"),
+            Key::Named(NamedKey::ArrowUp) => Some(if app_cursor { b"\x1bOA" } else { b"\x1b[A" }),
+            Key::Named(NamedKey::ArrowDown) => Some(if app_cursor { b"\x1bOB" } else { b"\x1b[B" }),
+            Key::Named(NamedKey::ArrowRight) => {
+                Some(if app_cursor { b"\x1bOC" } else { b"\x1b[C" })
+            }
+            Key::Named(NamedKey::ArrowLeft) => Some(if app_cursor { b"\x1bOD" } else { b"\x1b[D" }),
+            Key::Named(NamedKey::Home) => Some(if app_cursor { b"\x1bOH" } else { b"\x1b[H" }),
+            Key::Named(NamedKey::End) => Some(if app_cursor { b"\x1bOF" } else { b"\x1b[F" }),
             Key::Named(NamedKey::PageUp) => Some(b"\x1b[5~"),
             Key::Named(NamedKey::PageDown) => Some(b"\x1b[6~"),
             Key::Named(NamedKey::Delete) => Some(b"\x1b[3~"),

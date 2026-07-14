@@ -37,16 +37,40 @@ impl App {
 
         if self.raw_mode {
             // Alt screen has no scrollback. The standard behaviors:
-            // programs that requested mouse reporting get the events
-            // themselves (protocol forwarding is future work — no-op
-            // for now); otherwise translate the wheel into arrow keys
-            // (DECSET 1007 alternate-scroll) so vim / less / Claude
-            // scroll their own content.
-            let Some(term) = &self.terminal else { return };
-            if term.wants_mouse_reporting() || !term.alternate_scroll() {
+            // programs that requested mouse reporting (Claude Code,
+            // htop, vim mouse=a) get real wheel events in their
+            // protocol; otherwise translate the wheel into arrow keys
+            // (DECSET 1007 alternate-scroll) so vim / less scroll
+            // their own content.
+            let (wants_mouse, alt_scroll, app_cursor) = match &self.terminal {
+                Some(t) => (
+                    t.wants_mouse_reporting(),
+                    t.alternate_scroll(),
+                    t.app_cursor_keys(),
+                ),
+                None => return,
+            };
+
+            if wants_mouse {
+                use super::mouse::{MOUSE_BTN_WHEEL_DOWN, MOUSE_BTN_WHEEL_UP};
+                let Some(cell) = self.pixel_to_cell(self.mouse.last_cursor_pos) else {
+                    return;
+                };
+                let button = if n > 0 {
+                    MOUSE_BTN_WHEEL_UP
+                } else {
+                    MOUSE_BTN_WHEEL_DOWN
+                };
+                for _ in 0..n.unsigned_abs() {
+                    self.forward_mouse(button, cell, true);
+                }
                 return;
             }
-            let seq: &[u8] = match (term.app_cursor_keys(), n > 0) {
+
+            if !alt_scroll {
+                return;
+            }
+            let seq: &[u8] = match (app_cursor, n > 0) {
                 (true, true) => b"\x1bOA",
                 (true, false) => b"\x1bOB",
                 (false, true) => b"\x1b[A",
