@@ -86,6 +86,15 @@ pub struct Renderer {
     /// Optional padding tint while the viewport is scrolled into
     /// history (cooked mode) — a "not at the live tail" cue.
     pub(crate) scrolled_bg: Option<Color>,
+    /// Debounce state for Sync mode: the currently winning perimeter
+    /// color (quantized) and how many consecutive frames it has won.
+    /// A new color is only committed to the padding after a stable
+    /// streak, so partial repaints can't flicker the frame.
+    pub(crate) alt_bg_candidate: Option<[u8; 4]>,
+    pub(crate) alt_bg_streak: u32,
+    /// The committed alt-screen padding color. None = no stable
+    /// majority yet → fall back to the theme background.
+    pub(crate) alt_bg_committed: Option<Color>,
     /// Default glyph style applied to cells with no bold/italic flags.
     /// Driven by `[font] weight = "bold"` / `style = "italic"` in the config
     /// file, so users can set a baseline weight the whole terminal inherits.
@@ -153,6 +162,9 @@ impl Renderer {
             current_y_shift_rows: 0,
             alt_bg_policy: AltBgPolicy::Sync,
             scrolled_bg: None,
+            alt_bg_candidate: None,
+            alt_bg_streak: 0,
+            alt_bg_committed: None,
             padding_x: 0.0,
             padding_y: 0.0,
             bottom_anchor: true,

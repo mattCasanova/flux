@@ -9,21 +9,60 @@ use crate::core::{CellInstance, color_matches};
 use crate::renderer::Renderer;
 use flux_types::{CellFlags, Color, TerminalGrid};
 
+/// Frames a perimeter winner must hold before the padding adopts it —
+/// keeps partial repaints (clear-then-redraw) from flickering the frame.
+const ALT_BG_STABLE_FRAMES: u32 = 3;
+
+fn quantize(color: Color) -> [u8; 4] {
+    [
+        (color.r * 255.0) as u8,
+        (color.g * 255.0) as u8,
+        (color.b * 255.0) as u8,
+        (color.a * 255.0) as u8,
+    ]
+}
+
+impl Renderer {
+    /// Debounced perimeter-majority background for alt-screen padding.
+    /// Commits a new color only when it (a) holds a strict majority of
+    /// the perimeter and (b) has won for `ALT_BG_STABLE_FRAMES`
+    /// consecutive frames — except the very first commit after entering
+    /// the alt screen, which is immediate so vim doesn't flash the
+    /// theme color on launch. No stable majority → theme background.
+    fn debounced_edge_bg(&mut self, grid: &TerminalGrid) -> Color {
+        let (winner, votes, total) = dominant_edge_bg_stats(grid);
+        let key = quantize(winner);
+
+        if self.alt_bg_candidate == Some(key) {
+            self.alt_bg_streak = self.alt_bg_streak.saturating_add(1);
+        } else {
+            self.alt_bg_candidate = Some(key);
+            self.alt_bg_streak = 1;
+        }
+
+        let has_majority = votes * 2 > total;
+        let stable = self.alt_bg_streak >= ALT_BG_STABLE_FRAMES || self.alt_bg_committed.is_none();
+        if has_majority && stable {
+            self.alt_bg_committed = Some(winner);
+        }
+
+        self.alt_bg_committed.unwrap_or(self.clear_color)
+    }
+}
+
 /// The most common cell background along the grid perimeter — what an
 /// alt-screen program "means" by its background color, robust against
 /// individually tinted rows (statuslines, highlighted entries, Claude
 /// Code's prompt rows). The full perimeter (not just top/bottom rows)
-/// keeps a single full-width statusline from tying the vote.
-fn dominant_edge_bg(grid: &TerminalGrid) -> Color {
+/// keeps a single full-width statusline from tying the vote. Returns
+/// `(winner, votes_for_winner, total_votes)` so callers can require a
+/// strict majority.
+fn dominant_edge_bg_stats(grid: &TerminalGrid) -> (Color, usize, usize) {
     let mut counts: std::collections::HashMap<[u8; 4], (usize, Color)> = Default::default();
+    let mut total = 0usize;
     let mut tally = |bg: Color| {
-        let key = [
-            (bg.r * 255.0) as u8,
-            (bg.g * 255.0) as u8,
-            (bg.b * 255.0) as u8,
-            (bg.a * 255.0) as u8,
-        ];
-        counts.entry(key).or_insert((0, bg)).0 += 1;
+        counts.entry(quantize(bg)).or_insert((0, bg)).0 += 1;
+        total += 1;
     };
 
     let last_row = grid.rows - 1;
@@ -45,8 +84,8 @@ fn dominant_edge_bg(grid: &TerminalGrid) -> Color {
     counts
         .into_values()
         .max_by_key(|(count, _)| *count)
-        .map(|(_, color)| color)
-        .unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0))
+        .map(|(votes, color)| (color, votes, total))
+        .unwrap_or((Color::new(0.0, 0.0, 0.0, 1.0), 0, total.max(1)))
 }
 
 impl Renderer {
@@ -89,22 +128,31 @@ impl Renderer {
         //   program's background (majority vote over the grid perimeter,
         //   NOT a single-cell sample: Claude Code tints individual rows
         //   and a corner sample flashed the padding) so vim et al fill
-        //   the window edge-to-edge.
+        //   the window edge-to-edge. Debounced: a new winner is only
+        //   committed after a stable streak, and it must hold a true
+        //   majority of the perimeter — else the theme bg is used.
         // - Cooked + scrolled into history: optional `scrolled_bg` tint
         //   as a "not at the live tail" cue.
         // - Otherwise: the user's theme background.
         self.effective_clear_color = if !self.bottom_anchor && grid.rows > 0 && grid.cols > 0 {
             match self.alt_bg_policy {
-                crate::renderer::AltBgPolicy::Sync => dominant_edge_bg(grid),
+                crate::renderer::AltBgPolicy::Sync => self.debounced_edge_bg(grid),
                 crate::renderer::AltBgPolicy::Theme => self.clear_color,
                 crate::renderer::AltBgPolicy::Fixed(color) => color,
             }
-        } else if grid.display_offset > 0
-            && let Some(scrolled) = self.scrolled_bg
-        {
-            scrolled
         } else {
-            self.clear_color
+            // Leaving (or never on) the alt screen: reset the debounce
+            // so the next alt-screen program starts a fresh election.
+            self.alt_bg_candidate = None;
+            self.alt_bg_streak = 0;
+            self.alt_bg_committed = None;
+            if grid.display_offset > 0
+                && let Some(scrolled) = self.scrolled_bg
+            {
+                scrolled
+            } else {
+                self.clear_color
+            }
         };
 
         let mut instances = std::mem::take(&mut self.output_instances);
@@ -234,10 +282,12 @@ mod tests {
     }
 
     #[test]
-    fn uniform_background_wins() {
+    fn uniform_background_wins_with_full_majority() {
         let bg = Color::new(0.1, 0.2, 0.3, 1.0);
         let grid = grid_with_bgs(24, 80, bg);
-        assert_eq!(dominant_edge_bg(&grid), bg);
+        let (winner, votes, total) = dominant_edge_bg_stats(&grid);
+        assert_eq!(winner, bg);
+        assert_eq!(votes, total);
     }
 
     #[test]
@@ -257,7 +307,9 @@ mod tests {
                 },
             );
         }
-        assert_eq!(dominant_edge_bg(&grid), bg);
+        let (winner, votes, total) = dominant_edge_bg_stats(&grid);
+        assert_eq!(winner, bg);
+        assert!(votes * 2 > total, "true background holds a majority");
     }
 
     #[test]
@@ -278,6 +330,31 @@ mod tests {
                 },
             );
         }
-        assert_eq!(dominant_edge_bg(&grid), bg);
+        let (winner, votes, total) = dominant_edge_bg_stats(&grid);
+        assert_eq!(winner, bg);
+        assert!(votes * 2 > total);
+    }
+
+    #[test]
+    fn even_split_has_no_majority() {
+        let a = Color::new(0.1, 0.2, 0.3, 1.0);
+        let b = Color::new(0.5, 0.5, 0.5, 1.0);
+        // Two-row grid: top row all `a`, bottom row all `b` — a 50/50
+        // perimeter (sides contribute nothing on a 2-row grid). Neither
+        // color may claim a strict majority, so the debounce falls back
+        // to the theme background.
+        let mut grid = grid_with_bgs(2, 40, a);
+        for c in 0..40 {
+            grid.set(
+                1,
+                c,
+                CellData {
+                    bg: b,
+                    ..CellData::default()
+                },
+            );
+        }
+        let (_, votes, total) = dominant_edge_bg_stats(&grid);
+        assert!(votes * 2 <= total, "no strict majority on an even split");
     }
 }
