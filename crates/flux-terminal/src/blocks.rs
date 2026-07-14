@@ -76,9 +76,15 @@ impl BlockCapture {
         self.cwd.as_deref()
     }
 
-    #[allow(dead_code)] // consumed by v0.3 block system
     pub(crate) fn shell_phase(&self) -> ShellPhase {
         self.phase.unwrap_or(ShellPhase::Idle)
+    }
+
+    /// True once any OSC 133 marker has been seen — i.e. shell
+    /// integration is live on this PTY. Gates the phase-based keyboard
+    /// routing so sessions without integration keep classic behavior.
+    pub(crate) fn integration_active(&self) -> bool {
+        self.phase.is_some()
     }
 
     pub(crate) fn last_exit_code(&self) -> Option<i32> {

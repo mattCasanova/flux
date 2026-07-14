@@ -12,7 +12,7 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
 use flux_types::{CellData, CellFlags, Color, TerminalGrid};
 
-use crate::blocks::BlockCapture;
+use crate::blocks::{BlockCapture, ShellPhase};
 
 /// Events that alacritty_terminal sends back (bell, title change, etc.)
 #[derive(Debug)]
@@ -193,22 +193,30 @@ impl TerminalState {
     pub fn grid_snapshot(&self, fg_default: Color, bg_default: Color) -> TerminalGrid {
         let content = self.term.renderable_content();
         let mut grid = TerminalGrid::new(self.cols, self.rows);
-        // `renderable_content` already returns the scrolled viewport;
-        // the offset is passed along so consumers can map screen rows
-        // to absolute scrollback lines (F12 selection).
-        grid.display_offset = self.term.grid().display_offset();
+        // Alacritty's display_iter yields points in GRID coordinates,
+        // where scrolled-into-history rows have NEGATIVE line numbers
+        // (line 0 is the top of the live screen, -1 the line above it).
+        // Viewport row = grid line + display_offset. Getting this wrong
+        // renders a scrolled view as blank — regression-tested below.
+        let display_offset = content.display_offset as i32;
+        grid.display_offset = content.display_offset;
 
-        // Set cursor position
+        // Set cursor position (scrolled up, the cursor converts to a row
+        // at/below the viewport bottom and is culled by the bounds check).
         let cursor_point = content.cursor.point;
         let cursor_col = cursor_point.column.0;
-        let cursor_row = cursor_point.line.0 as usize;
-        if cursor_col < self.cols && cursor_row < self.rows {
-            grid.cursor = Some((cursor_col, cursor_row));
+        let cursor_row = cursor_point.line.0 + display_offset;
+        if cursor_col < self.cols && (0..self.rows as i32).contains(&cursor_row) {
+            grid.cursor = Some((cursor_col, cursor_row as usize));
         }
 
         for cell in content.display_iter {
             let col = cell.point.column.0;
-            let row = cell.point.line.0 as usize;
+            let row_i = cell.point.line.0 + display_offset;
+            if row_i < 0 {
+                continue;
+            }
+            let row = row_i as usize;
 
             if col >= self.cols || row >= self.rows {
                 continue;
@@ -295,6 +303,35 @@ impl TerminalState {
     /// enable this by default.
     pub fn is_bracketed_paste(&self) -> bool {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
+    /// True when the child program has requested xterm mouse reporting
+    /// (vim with `mouse=a`, htop, …). Local mouse selection defers to
+    /// the program in that case.
+    pub fn wants_mouse_reporting(&self) -> bool {
+        self.term.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    /// True when wheel events over the alt screen should be translated
+    /// to arrow keys (DECSET 1007 — on by default in alacritty's mode,
+    /// cleared by programs that want raw wheel control).
+    pub fn alternate_scroll(&self) -> bool {
+        self.term.mode().contains(TermMode::ALTERNATE_SCROLL)
+    }
+
+    /// True when the application cursor-keys mode is active (DECCKM) —
+    /// arrow keys must then be encoded as `\x1bOA`-style sequences.
+    pub fn app_cursor_keys(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
+    /// True while a command is running (between OSC 133;C and 133;D).
+    /// Keyboard routing sends keys straight to the PTY during this
+    /// window so interactive programs that never touch the alt screen
+    /// (sudo prompts, REPLs) receive keystrokes directly.
+    pub fn is_executing(&self) -> bool {
+        self.block_capture.integration_active()
+            && self.block_capture.shell_phase() == ShellPhase::Executing
     }
 
     /// Resize the terminal grid.
@@ -438,6 +475,43 @@ mod tests {
         // The snapshot carries the offset for downstream consumers.
         let grid = state.grid_snapshot(Color::default(), Color::default());
         assert_eq!(grid.display_offset, 0);
+    }
+
+    /// Regression test for the "scrolled view renders black" bug:
+    /// display_iter points are grid coords where history rows are
+    /// NEGATIVE lines; the snapshot must convert to viewport rows.
+    #[test]
+    fn scrolled_snapshot_shows_history_content() {
+        let mut state = TerminalState::new(80, 24, 1000);
+        for i in 0..30 {
+            state.process_bytes(format!("line {}\r\n", i).as_bytes());
+        }
+
+        // Tailing: 31 logical rows, viewport shows rows 7.. => top = "line 7".
+        let grid = state.grid_snapshot(Color::default(), Color::default());
+        let top: String = (0..7).map(|c| grid.get(0, c).character).collect();
+        assert_eq!(top.trim_end(), "line 7");
+
+        // Scroll 7 up: top of the viewport must show "line 0" — before
+        // the coordinate fix this row came back blank.
+        state.scroll_lines(7);
+        let grid = state.grid_snapshot(Color::default(), Color::default());
+        let top: String = (0..7).map(|c| grid.get(0, c).character).collect();
+        assert_eq!(top.trim_end(), "line 0");
+        // The live cursor is below the scrolled viewport — hidden.
+        assert_eq!(grid.cursor, None);
+    }
+
+    #[test]
+    fn executing_phase_gates_on_osc_133() {
+        let mut state = TerminalState::new(80, 24, 100);
+        assert!(!state.is_executing(), "no integration yet");
+        state.process_bytes(b"\x1b]133;A\x07");
+        assert!(!state.is_executing(), "at prompt");
+        state.process_bytes(b"\x1b]133;C\x07");
+        assert!(state.is_executing(), "command running");
+        state.process_bytes(b"\x1b]133;D;0\x07");
+        assert!(!state.is_executing(), "command finished");
     }
 
     #[test]
