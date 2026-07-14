@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 
-use flux_types::{CellPos, Color, Selection, SelectionMode};
+use flux_types::{CellPos, Selection, SelectionMode};
 
 use super::App;
 
@@ -317,11 +317,8 @@ impl App {
     }
 
     /// Grid snapshot for word-boundary snapping and text extraction.
-    /// Colors are irrelevant for both, so defaults are fine.
     pub(super) fn snapshot_for_selection(&self) -> Option<flux_types::TerminalGrid> {
-        self.terminal
-            .as_ref()
-            .map(|t| t.grid_snapshot(Color::default(), Color::default()))
+        self.terminal.as_ref().map(|t| t.grid_snapshot())
     }
 
     pub(super) fn refresh_selection_render(&mut self) {

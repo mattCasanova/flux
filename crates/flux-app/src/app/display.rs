@@ -3,8 +3,6 @@
 //! "tell the GPU what to show" surface; the rendering code itself lives
 //! entirely in `flux-renderer`.
 
-use flux_types::Color;
-
 use super::{App, PopupState};
 
 impl App {
@@ -17,11 +15,7 @@ impl App {
             return;
         };
 
-        let fg = Color::from_hex(&self.config.theme.foreground).unwrap_or_default();
-        let bg = Color::from_hex(&self.config.theme.background)
-            .unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
-
-        let grid = terminal.grid_snapshot(fg, bg);
+        let grid = terminal.grid_snapshot();
         renderer.set_grid(&grid);
         // Re-sync the selection overlay: set_grid may have changed the
         // bottom-anchor shift the highlight rects are positioned with.

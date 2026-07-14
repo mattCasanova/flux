@@ -10,7 +10,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
-use flux_types::{CellData, CellFlags, Color, TerminalGrid};
+use flux_types::{CellData, CellFlags, Color, ResolvedTheme, TerminalGrid};
 
 use crate::blocks::{BlockCapture, ShellPhase};
 
@@ -92,15 +92,17 @@ pub struct TerminalState {
     /// machine from `parser` — both see the exact same `&[u8]` but
     /// neither affects the other.
     block_parser: vte::Parser,
+    /// Resolved color palette for named/indexed ANSI colors.
+    theme: ResolvedTheme,
     event_rx: mpsc::Receiver<TermEvent>,
     cols: usize,
     rows: usize,
 }
 
 impl TerminalState {
-    /// Create a new terminal state with the given dimensions and
-    /// scrollback capacity in lines.
-    pub fn new(cols: usize, rows: usize, scrollback_lines: usize) -> Self {
+    /// Create a new terminal state with the given dimensions,
+    /// scrollback capacity in lines, and resolved color theme.
+    pub fn new(cols: usize, rows: usize, scrollback_lines: usize, theme: ResolvedTheme) -> Self {
         let (tx, rx) = mpsc::channel();
         let event_proxy = EventProxy { tx };
 
@@ -115,6 +117,7 @@ impl TerminalState {
         Self {
             term,
             parser,
+            theme,
             block_capture: BlockCapture::new(),
             block_parser: vte::Parser::new(),
             event_rx: rx,
@@ -190,7 +193,7 @@ impl TerminalState {
     }
 
     /// Snapshot the current terminal grid for rendering.
-    pub fn grid_snapshot(&self, fg_default: Color, bg_default: Color) -> TerminalGrid {
+    pub fn grid_snapshot(&self) -> TerminalGrid {
         let content = self.term.renderable_content();
         let mut grid = TerminalGrid::new(self.cols, self.rows);
         // Alacritty's display_iter yields points in GRID coordinates,
@@ -222,8 +225,8 @@ impl TerminalState {
                 continue;
             }
 
-            let fg = self.convert_color(cell.fg, &fg_default);
-            let bg = self.convert_color(cell.bg, &bg_default);
+            let fg = self.convert_color(cell.fg);
+            let bg = self.convert_color(cell.bg);
 
             let mut flags = CellFlags::empty();
             if cell
@@ -364,11 +367,7 @@ impl TerminalState {
     }
 
     /// Convert an alacritty color to our Color type.
-    fn convert_color(
-        &self,
-        color: alacritty_terminal::vte::ansi::Color,
-        _default: &Color,
-    ) -> Color {
+    fn convert_color(&self, color: alacritty_terminal::vte::ansi::Color) -> Color {
         match color {
             alacritty_terminal::vte::ansi::Color::Named(named) => self.named_color(named),
             alacritty_terminal::vte::ansi::Color::Spec(rgb) => Color::from_rgb(rgb.r, rgb.g, rgb.b),
@@ -376,31 +375,31 @@ impl TerminalState {
         }
     }
 
-    /// Map named ANSI colors to Tokyo Night Storm palette.
-    /// TODO: Read these from the theme file.
+    /// Map named ANSI colors through the resolved theme.
     fn named_color(&self, color: alacritty_terminal::vte::ansi::NamedColor) -> Color {
         use alacritty_terminal::vte::ansi::NamedColor::*;
+        let t = &self.theme;
         match color {
-            Black => Color::from_hex("#414868").unwrap(),
-            Red => Color::from_hex("#f7768e").unwrap(),
-            Green => Color::from_hex("#73daca").unwrap(),
-            Yellow => Color::from_hex("#e0af68").unwrap(),
-            Blue => Color::from_hex("#7aa2f7").unwrap(),
-            Magenta => Color::from_hex("#bb9af7").unwrap(),
-            Cyan => Color::from_hex("#7dcfff").unwrap(),
-            White => Color::from_hex("#c0caf5").unwrap(),
-            BrightBlack => Color::from_hex("#6a7099").unwrap(),
-            BrightRed => Color::from_hex("#ff9999").unwrap(),
-            BrightGreen => Color::from_hex("#b9e986").unwrap(),
-            BrightYellow => Color::from_hex("#f4e070").unwrap(),
-            BrightBlue => Color::from_hex("#9cc1ff").unwrap(),
-            BrightMagenta => Color::from_hex("#d6b4ff").unwrap(),
-            BrightCyan => Color::from_hex("#a3e6ff").unwrap(),
-            BrightWhite => Color::from_hex("#e0e6ff").unwrap(),
-            Foreground => Color::from_hex("#c0caf5").unwrap(),
-            Background => Color::from_hex("#24283b").unwrap(),
-            Cursor => Color::from_hex("#c0caf5").unwrap(),
-            _ => Color::from_hex("#c0caf5").unwrap(),
+            Black => t.ansi(0),
+            Red => t.ansi(1),
+            Green => t.ansi(2),
+            Yellow => t.ansi(3),
+            Blue => t.ansi(4),
+            Magenta => t.ansi(5),
+            Cyan => t.ansi(6),
+            White => t.ansi(7),
+            BrightBlack => t.ansi(8),
+            BrightRed => t.ansi(9),
+            BrightGreen => t.ansi(10),
+            BrightYellow => t.ansi(11),
+            BrightBlue => t.ansi(12),
+            BrightMagenta => t.ansi(13),
+            BrightCyan => t.ansi(14),
+            BrightWhite => t.ansi(15),
+            Foreground => t.foreground,
+            Background => t.background,
+            Cursor => t.cursor,
+            _ => t.foreground,
         }
     }
 
@@ -460,7 +459,7 @@ mod tests {
     /// actually updates `cwd`.
     #[test]
     fn block_capture_runs_alongside_main_parser() {
-        let mut state = TerminalState::new(80, 24, 1000);
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
         state.process_bytes(b"hello world\n");
         state.process_bytes(b"\x1b[31mred\x1b[0m\n");
         // Feed an OSC 7 sequence — the side parser should accept it
@@ -470,7 +469,7 @@ mod tests {
 
     #[test]
     fn scrollback_holds_history_and_offset_tracks_scrolling() {
-        let mut state = TerminalState::new(80, 24, 1000);
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
         // Push well past one screen of output.
         for i in 0..100 {
             state.process_bytes(format!("line {}\r\n", i).as_bytes());
@@ -494,7 +493,7 @@ mod tests {
         assert_eq!(state.display_offset(), 0);
 
         // The snapshot carries the offset for downstream consumers.
-        let grid = state.grid_snapshot(Color::default(), Color::default());
+        let grid = state.grid_snapshot();
         assert_eq!(grid.display_offset, 0);
     }
 
@@ -503,20 +502,20 @@ mod tests {
     /// NEGATIVE lines; the snapshot must convert to viewport rows.
     #[test]
     fn scrolled_snapshot_shows_history_content() {
-        let mut state = TerminalState::new(80, 24, 1000);
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
         for i in 0..30 {
             state.process_bytes(format!("line {}\r\n", i).as_bytes());
         }
 
         // Tailing: 31 logical rows, viewport shows rows 7.. => top = "line 7".
-        let grid = state.grid_snapshot(Color::default(), Color::default());
+        let grid = state.grid_snapshot();
         let top: String = (0..7).map(|c| grid.get(0, c).character).collect();
         assert_eq!(top.trim_end(), "line 7");
 
         // Scroll 7 up: top of the viewport must show "line 0" — before
         // the coordinate fix this row came back blank.
         state.scroll_lines(7);
-        let grid = state.grid_snapshot(Color::default(), Color::default());
+        let grid = state.grid_snapshot();
         let top: String = (0..7).map(|c| grid.get(0, c).character).collect();
         assert_eq!(top.trim_end(), "line 0");
         // The live cursor is below the scrolled viewport — hidden.
@@ -525,7 +524,7 @@ mod tests {
 
     #[test]
     fn executing_phase_gates_on_osc_133() {
-        let mut state = TerminalState::new(80, 24, 100);
+        let mut state = TerminalState::new(80, 24, 100, ResolvedTheme::default());
         assert!(!state.is_executing(), "no integration yet");
         state.process_bytes(b"\x1b]133;A\x07");
         assert!(!state.is_executing(), "at prompt");
@@ -537,7 +536,7 @@ mod tests {
 
     #[test]
     fn zero_scrollback_keeps_offset_pinned() {
-        let mut state = TerminalState::new(80, 24, 0);
+        let mut state = TerminalState::new(80, 24, 0, ResolvedTheme::default());
         for i in 0..50 {
             state.process_bytes(format!("line {}\r\n", i).as_bytes());
         }

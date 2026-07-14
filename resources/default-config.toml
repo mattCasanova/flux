@@ -68,3 +68,10 @@ lines = 10000
 # into history, as a quiet "not at the live tail" cue. Any hex color;
 # leave unset for no change.
 # scrolled_background = "#2a2f45"
+
+# [theme] ANSI palette overrides — unset keys keep the built-in
+# Tokyo Night Storm palette. Uncomment under [theme] to customize:
+#   black / red / green / yellow / blue / magenta / cyan / white
+#   bright_black / ... / bright_white
+#   cursor (defaults to foreground)
+# red = "#f7768e"
