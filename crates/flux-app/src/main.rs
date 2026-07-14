@@ -4,6 +4,7 @@
 
 mod app;
 mod config;
+mod logging;
 mod platform;
 
 use anyhow::Result;
@@ -12,7 +13,9 @@ use flux_input::{CommandHistory, InputEditor};
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
-    env_logger::init();
+    // Logging + panic hook first, so every subsequent failure leaves a
+    // trail in ~/.local/state/flux/.
+    logging::init()?;
     platform::ensure_layout();
 
     let config = config::FluxConfig::load()?;

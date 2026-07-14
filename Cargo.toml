@@ -29,7 +29,7 @@ libc = "0.2"
 bytemuck = { version = "1", features = ["derive"] }
 bitflags = "2"
 log = "0.4"
-env_logger = "0.11"
+flexi_logger = "0.31"
 anyhow = "1"
 dirs = "6"
 toml = "0.8"

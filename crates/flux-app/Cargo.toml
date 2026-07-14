@@ -18,7 +18,7 @@ flux-input = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
+flexi_logger = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
