@@ -54,6 +54,8 @@ pub(super) const MOUSE_BTN_LEFT: u8 = 0;
 pub(super) const MOUSE_BTN_WHEEL_UP: u8 = 64;
 pub(super) const MOUSE_BTN_WHEEL_DOWN: u8 = 65;
 const MOUSE_DRAG_FLAG: u8 = 32;
+/// "No button" + motion flag — hover events for DECSET 1003 tracking.
+const MOUSE_BTN_HOVER: u8 = 3 + MOUSE_DRAG_FLAG;
 
 /// SGR encoding (DECSET 1006): `\x1b[<btn;col;row(M|m)`, 1-based cells.
 fn encode_sgr(button: u8, cell: CellPos, pressed: bool) -> Vec<u8> {
@@ -98,6 +100,27 @@ impl App {
             {
                 self.mouse.last_forwarded_cell = Some(cell);
                 self.forward_mouse(MOUSE_BTN_LEFT | MOUSE_DRAG_FLAG, cell, true);
+            }
+            return;
+        }
+
+        // Hover motion (DECSET 1003 any-event tracking): programs like
+        // Claude Code want to see the pointer move even with no button
+        // held. Shift suppresses forwarding, consistent with the
+        // selection bypass.
+        if self.raw_mode
+            && !self.modifiers.shift_key()
+            && self
+                .terminal
+                .as_ref()
+                .map(|t| t.reports_mouse_motion())
+                .unwrap_or(false)
+        {
+            if let Some(cell) = self.pixel_to_cell(pos)
+                && self.mouse.last_forwarded_cell != Some(cell)
+            {
+                self.mouse.last_forwarded_cell = Some(cell);
+                self.forward_mouse(MOUSE_BTN_HOVER, cell, true);
             }
             return;
         }

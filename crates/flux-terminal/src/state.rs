@@ -334,6 +334,12 @@ impl TerminalState {
             .intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
     }
 
+    /// True when the program requested hover motion with no button held
+    /// (DECSET 1003 any-event tracking only — Claude Code enables this).
+    pub fn reports_mouse_motion(&self) -> bool {
+        self.term.mode().contains(TermMode::MOUSE_MOTION)
+    }
+
     /// True when the application cursor-keys mode is active (DECCKM) —
     /// arrow keys must then be encoded as `\x1bOA`-style sequences.
     pub fn app_cursor_keys(&self) -> bool {
