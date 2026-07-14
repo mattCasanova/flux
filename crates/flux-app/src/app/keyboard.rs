@@ -140,8 +140,26 @@ impl App {
                     self.snap_to_bottom();
                     self.clear_selection();
                     let line = self.input.take_line();
+                    // Multi-line buffers must reach the shell as ONE
+                    // unit. Raw embedded \n = one accept-line per line
+                    // in zle, which shatters loops into per-line parse
+                    // errors. Bracketed paste loads the whole block
+                    // into the shell's edit buffer; the trailing \r
+                    // then accepts it in a single parse.
+                    let wrap = line.contains('\n')
+                        && self
+                            .terminal
+                            .as_ref()
+                            .map(|t| t.is_bracketed_paste())
+                            .unwrap_or(false);
                     if let Some(pty) = &mut self.pty {
-                        let _ = pty.write(line.as_bytes());
+                        if wrap {
+                            let _ = pty.write(b"\x1b[200~");
+                            let _ = pty.write(line.as_bytes());
+                            let _ = pty.write(b"\x1b[201~");
+                        } else {
+                            let _ = pty.write(line.as_bytes());
+                        }
                         let _ = pty.write(b"\r");
                     }
                 }
