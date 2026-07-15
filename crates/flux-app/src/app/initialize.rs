@@ -59,8 +59,49 @@ impl App {
             self.config.theme.resolve(),
         );
 
-        // Spawn the PTY with matching dimensions
+        // Spawn the PTY with matching dimensions. Shell integration is
+        // installed invisibly where the shell supports it: zsh gets a
+        // ZDOTDIR bootstrap (nothing typed, nothing echoed at startup);
+        // bash/fish still get the script sourced via the PTY below.
         let shell = flux_shell::detect_shell();
+        let integration = shell.integration_script();
+        let script_path = if integration.is_empty() {
+            None
+        } else {
+            let script_dir = crate::platform::shell_integration_dir();
+            let path = script_dir.join(format!("flux-integration.{}", shell.name()));
+            match std::fs::write(&path, integration) {
+                Ok(()) => Some(path),
+                Err(e) => {
+                    log::warn!("Failed to write integration script: {}", e);
+                    None
+                }
+            }
+        };
+
+        let mut extra_env: Vec<(String, String)> = Vec::new();
+        let mut inject_via_pty = script_path.is_some();
+        if shell.name() == "zsh"
+            && let Some(script) = &script_path
+        {
+            match Self::write_zsh_bootstrap(script) {
+                Ok(zdotdir) => {
+                    if let Ok(orig) = std::env::var("ZDOTDIR") {
+                        extra_env.push(("FLUX_ORIG_ZDOTDIR".into(), orig));
+                    }
+                    extra_env.push(("ZDOTDIR".into(), zdotdir.display().to_string()));
+                    inject_via_pty = false;
+                    log::info!(
+                        "zsh integration via ZDOTDIR bootstrap: {}",
+                        zdotdir.display()
+                    );
+                }
+                Err(e) => {
+                    log::warn!("ZDOTDIR bootstrap failed, falling back to injection: {}", e);
+                }
+            }
+        }
+
         let proxy = self.proxy.clone();
         let wake = Box::new(move || {
             let _ = proxy.send_event(());
@@ -70,24 +111,16 @@ impl App {
             cols.max(1) as u16,
             rows.max(1) as u16,
             wake,
+            &extra_env,
         )?;
 
-        // Auto-inject shell integration: write the script to a known
-        // path and source it in the new shell. This installs OSC 7
-        // (cwd) and OSC 133 (prompt/command lifecycle) hooks.
-        let integration = shell.integration_script();
-        if !integration.is_empty() {
-            let script_dir = crate::platform::shell_integration_dir();
-            let script_name = format!("flux-integration.{}", shell.name());
-            let script_path = script_dir.join(&script_name);
-            if let Err(e) = std::fs::write(&script_path, integration) {
-                log::warn!("Failed to write integration script: {}", e);
-            } else {
-                // Source the script silently in the new shell.
-                let source_cmd = format!("source '{}'\n", script_path.display());
-                let _ = pty.write(source_cmd.as_bytes());
-                log::info!("Shell integration installed: {}", script_path.display());
-            }
+        if inject_via_pty && let Some(script) = &script_path {
+            // Fallback path (bash/fish): source the script in the new
+            // shell. Visible at startup — their invisible bootstraps
+            // (--rcfile / vendor_conf.d) are future work.
+            let source_cmd = format!("source '{}'\n", script.display());
+            let _ = pty.write(source_cmd.as_bytes());
+            log::info!("Shell integration injected: {}", script.display());
         }
 
         log::info!("Renderer + PTY initialized");
@@ -101,6 +134,20 @@ impl App {
         self.request_redraw();
 
         Ok(())
+    }
+
+    /// Write the ZDOTDIR bootstrap directory: a `.zshenv` that restores
+    /// the user's real ZDOTDIR, chains their own `.zshenv`, and sources
+    /// the integration script — all before the first prompt, invisibly.
+    fn write_zsh_bootstrap(script_path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        let dir = crate::platform::shell_integration_dir().join("zsh");
+        std::fs::create_dir_all(&dir)?;
+        let content = flux_shell::integration::ZSH_BOOTSTRAP_TEMPLATE.replace(
+            "__FLUX_INTEGRATION_PATH__",
+            &script_path.display().to_string(),
+        );
+        std::fs::write(dir.join(".zshenv"), content)?;
+        Ok(dir)
     }
 
     fn create_renderer(&self, window: &Arc<Window>) -> anyhow::Result<flux_renderer::Renderer> {

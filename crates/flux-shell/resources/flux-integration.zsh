@@ -19,6 +19,18 @@ __flux_command_finished() {
 
 __flux_command_start() {
     printf '\x1b]133;C\x1b\\'
+    __flux_ensure_hook_order
+}
+
+# Re-assert hook ordering: exit-code capture must run FIRST in precmd
+# (before anything clobbers $?) and the prompt-marker wrap must run
+# LAST (after themes rewrite PROMPT). Needed because the ZDOTDIR
+# bootstrap loads this file BEFORE the user's rc, so oh-my-zsh / p10k
+# register their hooks after ours. Idempotent; runs from preexec so it
+# never mutates precmd_functions mid-iteration.
+__flux_ensure_hook_order() {
+    local others=(${precmd_functions:#__flux_*})
+    precmd_functions=(__flux_command_finished __flux_update_cwd "${others[@]}" __flux_wrap_prompt)
 }
 
 __flux_update_cwd() {

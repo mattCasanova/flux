@@ -36,8 +36,16 @@ pub struct PtyManager {
 impl PtyManager {
     /// Spawn a shell in a new PTY.
     /// `wake` is called from the reader thread whenever new output arrives,
-    /// so the main event loop knows to request a redraw.
-    pub fn spawn(shell_path: &str, cols: u16, rows: u16, wake: WakeCallback) -> Result<Self> {
+    /// so the main event loop knows to request a redraw. `extra_env`
+    /// entries are set on the child (e.g. the ZDOTDIR bootstrap that
+    /// loads shell integration invisibly).
+    pub fn spawn(
+        shell_path: &str,
+        cols: u16,
+        rows: u16,
+        wake: WakeCallback,
+        extra_env: &[(String, String)],
+    ) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -52,6 +60,9 @@ impl PtyManager {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("LANG", "en_US.UTF-8");
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
 
         // Spawn the shell
         let _child = pair.slave.spawn_command(cmd)?;
