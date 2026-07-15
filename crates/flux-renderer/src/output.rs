@@ -9,6 +9,19 @@ use crate::core::{CellInstance, color_matches};
 use crate::renderer::Renderer;
 use flux_types::{CellFlags, Color, TerminalGrid};
 
+/// Blend the selection tint (theme blue at 30%) over a cell's
+/// background — opaque result, standard source-over.
+fn blend_selection_tint(bg: Color) -> Color {
+    const TINT: Color = Color::new(0.478, 0.635, 0.969, 1.0); // #7aa2f7
+    const ALPHA: f32 = 0.30;
+    Color::new(
+        TINT.r * ALPHA + bg.r * (1.0 - ALPHA),
+        TINT.g * ALPHA + bg.g * (1.0 - ALPHA),
+        TINT.b * ALPHA + bg.b * (1.0 - ALPHA),
+        1.0,
+    )
+}
+
 /// Frames a perimeter winner must hold before the padding adopts it —
 /// keeps partial repaints (clear-then-redraw) from flickering the frame.
 const ALT_BG_STABLE_FRAMES: u32 = 3;
@@ -195,18 +208,28 @@ impl Renderer {
                 let cell_y = pad_y + row as f32 * cell_h + y_shift;
                 let is_under_cursor = self.show_shell_cursor && grid.cursor == Some((col, row));
 
+                // Selected cells get the selection tint blended over
+                // their background — the flag comes from the terminal's
+                // content-anchored selection, so it's already correct
+                // for scrolled viewports.
+                let cell_bg = if cell.flags.contains(CellFlags::SELECTION) {
+                    blend_selection_tint(cell.bg)
+                } else {
+                    cell.bg
+                };
+
                 // Paint the cell's background across the whole cell rect
                 // when it differs from the effective clear color. Skip the
                 // cursor cell — the cursor block drawn earlier is already
                 // filling that cell, and overdrawing it here would erase the
                 // cursor and leave only the small inverted-color glyph rect.
-                if !is_under_cursor && !color_matches(cell.bg, clear) {
+                if !is_under_cursor && !color_matches(cell_bg, clear) {
                     instances.push(CellInstance {
                         position: [cell_x, cell_y],
                         size: [cell_w, cell_h],
                         glyph_uv: [0.0, 0.0, 0.0, 0.0],
-                        fg_color: [cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a],
-                        bg_color: [cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a],
+                        fg_color: [cell_bg.r, cell_bg.g, cell_bg.b, cell_bg.a],
+                        bg_color: [cell_bg.r, cell_bg.g, cell_bg.b, cell_bg.a],
                     });
                 }
 
@@ -239,7 +262,7 @@ impl Renderer {
                     let cursor_fg = Color::from_hex("#c0caf5").unwrap_or_default();
                     (cursor_bg, cursor_fg)
                 } else {
-                    (cell.fg, cell.bg)
+                    (cell.fg, cell_bg)
                 };
                 self.render_glyph(
                     cell.character,

@@ -1,25 +1,31 @@
-//! Mouse selection — click/drag state machine and pixel→cell mapping.
+//! Mouse selection — click/drag state machine, pixel→cell mapping,
+//! xterm mouse-protocol forwarding, and drag-to-autoscroll.
 //!
-//! Cooked mode only for v0.2: raw-mode programs (vim, less) have their
-//! own mouse support that would need xterm mouse-protocol encoding to
-//! the PTY — deferred (see build plan F12 risks).
+//! Selection lives in the TERMINAL (alacritty's content-anchored
+//! model, absolute scrollback coordinates), not in viewport cells:
+//! it survives scrolling and new output, and dragging past the edge
+//! of the output area auto-scrolls so a selection can span far more
+//! than one screen. Highlighting arrives back via the SELECTION cell
+//! flag on grid snapshots.
 //!
-//! Selection coordinates are **viewport-relative** grid cells. Anything
-//! that shifts what those cells show (scrolling, new PTY output)
-//! clears the selection rather than trying to track content — absolute
-//! line identity is v0.3 block-spike territory.
+//! When a raw-mode program has requested mouse reporting (vim
+//! `mouse=a`, htop, Claude Code), events are encoded and forwarded to
+//! the PTY instead; Shift bypasses forwarding for a local selection.
 
 use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 
-use flux_types::{CellPos, Selection, SelectionMode};
+use flux_terminal::state::SelectMode;
+use flux_types::CellPos;
 
 use super::App;
 
 const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const MULTI_CLICK_DIST_PX: f64 = 5.0;
+/// Minimum interval between drag-autoscroll steps (per scrolled line).
+const AUTOSCROLL_TICK: Duration = Duration::from_millis(30);
 
 pub(crate) struct MouseState {
     last_click_at: Option<Instant>,
@@ -27,6 +33,10 @@ pub(crate) struct MouseState {
     click_count: u32,
     is_dragging: bool,
     pub(super) last_cursor_pos: PhysicalPosition<f64>,
+    /// Lines-per-tick drag-autoscroll: positive = scrolling up into
+    /// history (pointer above the output), negative = down, 0 = off.
+    autoscroll: i32,
+    last_autoscroll: Option<Instant>,
     /// Left button is held and events are being forwarded to the PTY
     /// (program requested mouse reporting).
     forwarding_drag: bool,
@@ -43,6 +53,8 @@ impl Default for MouseState {
             click_count: 0,
             is_dragging: false,
             last_cursor_pos: PhysicalPosition::new(0.0, 0.0),
+            autoscroll: 0,
+            last_autoscroll: None,
             forwarding_drag: false,
             last_forwarded_cell: None,
         }
@@ -108,7 +120,8 @@ impl App {
         // Claude Code want to see the pointer move even with no button
         // held. Shift suppresses forwarding, consistent with the
         // selection bypass.
-        if self.raw_mode
+        if !self.mouse.is_dragging
+            && self.raw_mode
             && !self.modifiers.shift_key()
             && self
                 .terminal
@@ -125,20 +138,22 @@ impl App {
             return;
         }
 
-        if !self.mouse.is_dragging || self.selection.is_none() {
+        if !self.mouse.is_dragging {
             return;
         }
-        let Some(cell) = self.pixel_to_cell(pos) else {
-            return;
-        };
-        let grid = self.snapshot_for_selection();
-        if let Some(sel) = &mut self.selection {
-            sel.extend_to(cell);
-            if let Some(grid) = &grid {
-                sel.snap_to_words(grid);
-            }
+
+        // Local selection drag. Pointer past the top/bottom edge of
+        // the output area arms autoscroll (stepped from redraws so it
+        // keeps scrolling while the pointer rests at the edge).
+        self.mouse.autoscroll = self.autoscroll_demand(pos);
+        let (cell, right_side) = self.pixel_to_cell_clamped(pos);
+        if let Some(term) = &mut self.terminal {
+            term.update_selection(cell.col, cell.row, right_side);
         }
-        self.refresh_selection_render();
+        self.update_display();
+        if self.mouse.autoscroll != 0 {
+            self.step_drag_autoscroll();
+        }
         self.request_redraw();
     }
 
@@ -181,35 +196,8 @@ impl App {
             ElementState::Pressed => self.handle_mouse_pressed(),
             ElementState::Released => {
                 self.mouse.is_dragging = false;
-                // A click that never dragged selects nothing — clear the
-                // degenerate single-cell selection so Cmd+C falls back to
-                // its non-selection behavior.
-                if let Some(sel) = &self.selection
-                    && sel.is_degenerate()
-                {
-                    self.clear_selection();
-                }
+                self.mouse.autoscroll = 0;
             }
-        }
-    }
-
-    /// Encode one mouse event in the program's requested protocol and
-    /// write it to the PTY.
-    pub(super) fn forward_mouse(&mut self, button: u8, cell: CellPos, pressed: bool) {
-        let sgr = self
-            .terminal
-            .as_ref()
-            .map(|t| t.sgr_mouse())
-            .unwrap_or(false);
-        let bytes = if sgr {
-            Some(encode_sgr(button, cell, pressed))
-        } else {
-            encode_legacy(button, cell, pressed)
-        };
-        if let Some(bytes) = bytes
-            && let Some(pty) = &mut self.pty
-        {
-            let _ = pty.write(&bytes);
         }
     }
 
@@ -251,32 +239,89 @@ impl App {
             self.clear_selection();
             return;
         };
+        let right_side = self.pointer_in_right_half(pos);
 
         let base_mode = match self.mouse.click_count {
-            2 => SelectionMode::Word,
-            3 => SelectionMode::Line,
-            _ => SelectionMode::Character,
+            2 => SelectMode::Word,
+            3 => SelectMode::Line,
+            _ => SelectMode::Char,
         };
         let mode = if self.modifiers.alt_key() {
-            SelectionMode::Block
+            SelectMode::Block
         } else {
             base_mode
         };
 
-        if self.modifiers.shift_key() && self.selection.is_some() {
-            if let Some(sel) = &mut self.selection {
-                sel.extend_to(cell);
+        if let Some(term) = &mut self.terminal {
+            if self.modifiers.shift_key() && term.has_selection() {
+                term.update_selection(cell.col, cell.row, right_side);
+            } else {
+                term.start_selection(mode, cell.col, cell.row, right_side);
             }
+        }
+        self.update_display();
+        self.request_redraw();
+    }
+
+    /// Lines-per-tick the drag wants to autoscroll, from how far the
+    /// pointer sits past the output area's top (positive, into
+    /// history) or bottom (negative). Farther past the edge = faster.
+    fn autoscroll_demand(&self, pos: PhysicalPosition<f64>) -> i32 {
+        let Some(renderer) = self.renderer.as_ref() else {
+            return 0;
+        };
+        let Some(term) = self.terminal.as_ref() else {
+            return 0;
+        };
+        let cell_h = renderer.cell_metrics().height as f64;
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor())
+            .unwrap_or(1.0);
+        let pad_y = self.config.window.padding_vertical as f64 * scale;
+        let top = pad_y;
+        let bottom = pad_y + term.rows() as f64 * cell_h;
+
+        if pos.y < top {
+            (((top - pos.y) / cell_h).ceil() as i32).min(5)
+        } else if pos.y > bottom {
+            -((((pos.y - bottom) / cell_h).ceil() as i32).min(5))
         } else {
-            self.selection = Some(Selection::new(cell, mode));
+            0
         }
+    }
 
-        let grid = self.snapshot_for_selection();
-        if let (Some(sel), Some(grid)) = (&mut self.selection, &grid) {
-            sel.snap_to_words(grid);
+    /// One throttled autoscroll step while a drag rests past the edge.
+    /// Called from mouse-move and from redraw (which re-arms itself via
+    /// request_redraw, so scrolling continues while the pointer is
+    /// still).
+    pub(super) fn step_drag_autoscroll(&mut self) {
+        if !self.mouse.is_dragging || self.mouse.autoscroll == 0 {
+            return;
         }
+        let now = Instant::now();
+        let due = self
+            .mouse
+            .last_autoscroll
+            .map(|t| now.duration_since(t) >= AUTOSCROLL_TICK)
+            .unwrap_or(true);
+        if !due {
+            // Keep frames coming so the next due tick fires.
+            self.request_redraw();
+            return;
+        }
+        self.mouse.last_autoscroll = Some(now);
 
-        self.refresh_selection_render();
+        let lines = self.mouse.autoscroll;
+        let (cell, right_side) = self.pixel_to_cell_clamped(self.mouse.last_cursor_pos);
+        if let Some(term) = &mut self.terminal {
+            term.scroll_lines(lines);
+            // Re-pin the head to the edge cell — the content moved
+            // beneath the pointer, extending the selection.
+            term.update_selection(cell.col, cell.row, right_side);
+        }
+        self.update_display();
         self.request_redraw();
     }
 
@@ -316,22 +361,77 @@ impl App {
         Some(CellPos { col, row })
     }
 
-    /// Grid snapshot for word-boundary snapping and text extraction.
-    pub(super) fn snapshot_for_selection(&self) -> Option<flux_types::TerminalGrid> {
-        self.terminal.as_ref().map(|t| t.grid_snapshot())
+    /// Like `pixel_to_cell`, but clamps to the nearest edge cell so a
+    /// drag past the boundary keeps extending the selection. Also
+    /// reports which half of the cell the pointer is in.
+    fn pixel_to_cell_clamped(&self, pos: PhysicalPosition<f64>) -> (CellPos, bool) {
+        let (cell_w, cell_h, y_shift_rows) = self
+            .renderer
+            .as_ref()
+            .map(|r| {
+                let m = r.cell_metrics();
+                (m.width as f64, m.height as f64, r.current_y_shift_rows())
+            })
+            .unwrap_or((8.0, 16.0, 0));
+        let (cols, rows) = self
+            .terminal
+            .as_ref()
+            .map(|t| (t.cols(), t.rows()))
+            .unwrap_or((1, 1));
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor())
+            .unwrap_or(1.0);
+        let pad_x = self.config.window.padding_horizontal as f64 * scale;
+        let pad_y = self.config.window.padding_vertical as f64 * scale;
+
+        let x = (pos.x - pad_x).max(0.0);
+        let y = (pos.y - pad_y).max(0.0);
+        let col = ((x / cell_w) as usize).min(cols.saturating_sub(1));
+        let visual_row = (y / cell_h) as usize;
+        let row = visual_row
+            .saturating_sub(y_shift_rows)
+            .min(rows.saturating_sub(1));
+        let right_side = (x / cell_w).fract() >= 0.5;
+        (CellPos { col, row }, right_side)
     }
 
-    pub(super) fn refresh_selection_render(&mut self) {
-        let cols = self.terminal.as_ref().map(|t| t.cols()).unwrap_or(0);
-        if let Some(renderer) = &mut self.renderer {
-            renderer.set_selection(self.selection.as_ref(), cols);
+    fn pointer_in_right_half(&self, pos: PhysicalPosition<f64>) -> bool {
+        self.pixel_to_cell_clamped(pos).1
+    }
+
+    /// Encode one mouse event in the program's requested protocol and
+    /// write it to the PTY.
+    pub(super) fn forward_mouse(&mut self, button: u8, cell: CellPos, pressed: bool) {
+        let sgr = self
+            .terminal
+            .as_ref()
+            .map(|t| t.sgr_mouse())
+            .unwrap_or(false);
+        let bytes = if sgr {
+            Some(encode_sgr(button, cell, pressed))
+        } else {
+            encode_legacy(button, cell, pressed)
+        };
+        if let Some(bytes) = bytes
+            && let Some(pty) = &mut self.pty
+        {
+            let _ = pty.write(&bytes);
         }
     }
 
     pub(super) fn clear_selection(&mut self) {
-        if self.selection.is_some() {
-            self.selection = None;
-            self.refresh_selection_render();
+        let had = self
+            .terminal
+            .as_ref()
+            .map(|t| t.has_selection())
+            .unwrap_or(false);
+        if had {
+            if let Some(term) = &mut self.terminal {
+                term.clear_terminal_selection();
+            }
+            self.update_display();
             self.request_redraw();
         }
     }

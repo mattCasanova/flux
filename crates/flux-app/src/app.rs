@@ -71,11 +71,10 @@ pub struct App {
     /// shuts the app down on the next wake. "exit closes the window,"
     /// like every terminal.
     pub(crate) shell_exited: bool,
-    /// Click/drag tracking for mouse selection (F12).
+    /// Click/drag tracking for mouse selection (F12). The selection
+    /// itself lives in `TerminalState` (content-anchored, survives
+    /// scrolling) — see mouse.rs.
     pub(crate) mouse: mouse::MouseState,
-    /// Active output selection in viewport-relative grid cells. Cleared
-    /// by scrolling, new PTY output, typing, or Escape — see mouse.rs.
-    pub(crate) selection: Option<flux_types::Selection>,
 }
 
 impl App {
@@ -101,7 +100,6 @@ impl App {
             scroll_accum: 0.0,
             shell_exited: false,
             mouse: mouse::MouseState::default(),
-            selection: None,
         }
     }
 }

@@ -7,10 +7,39 @@ use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
 use flux_types::{CellData, CellFlags, Color, ResolvedTheme, TerminalGrid};
+
+/// How a mouse gesture groups cells — mapped onto alacritty's
+/// selection machinery (which anchors to CONTENT in absolute
+/// scrollback coordinates, so selections survive scrolling and can
+/// span far more than one screen).
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SelectMode {
+    /// Cell-by-cell (click + drag).
+    Char,
+    /// Word-snapped (double-click).
+    Word,
+    /// Whole lines (triple-click).
+    Line,
+    /// Rectangular (Alt+drag).
+    Block,
+}
+
+impl SelectMode {
+    fn to_alacritty(self) -> SelectionType {
+        match self {
+            SelectMode::Char => SelectionType::Simple,
+            SelectMode::Word => SelectionType::Semantic,
+            SelectMode::Line => SelectionType::Lines,
+            SelectMode::Block => SelectionType::Block,
+        }
+    }
+}
 
 use crate::blocks::{BlockCapture, ShellPhase};
 
@@ -183,6 +212,47 @@ impl TerminalState {
         self.term.grid().display_offset()
     }
 
+    /// Convert a viewport cell to alacritty grid coordinates (absolute
+    /// within the visible+history window): grid line = viewport row −
+    /// display offset.
+    fn viewport_to_point(&self, col: usize, row: usize) -> Point {
+        let line = Line(row as i32 - self.display_offset() as i32);
+        Point::new(line, Column(col.min(self.cols.saturating_sub(1))))
+    }
+
+    /// Begin a selection at a viewport cell. `right_side` picks the
+    /// half of the cell the pointer landed in (char-precise edges).
+    pub fn start_selection(&mut self, mode: SelectMode, col: usize, row: usize, right_side: bool) {
+        let point = self.viewport_to_point(col, row);
+        let side = if right_side { Side::Right } else { Side::Left };
+        self.term.selection = Some(Selection::new(mode.to_alacritty(), point, side));
+    }
+
+    /// Extend the active selection to a viewport cell (drag /
+    /// Shift+click).
+    pub fn update_selection(&mut self, col: usize, row: usize, right_side: bool) {
+        let point = self.viewport_to_point(col, row);
+        let side = if right_side { Side::Right } else { Side::Left };
+        if let Some(selection) = &mut self.term.selection {
+            selection.update(point, side);
+        }
+    }
+
+    pub fn clear_terminal_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.term.selection.is_some()
+    }
+
+    /// The selected text, across scrollback if the selection spans it.
+    /// None when there's no selection or it's empty (a click that
+    /// never dragged).
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
     /// Drain any events from alacritty_terminal (PtyWrite, Bell, Title).
     pub fn drain_events(&self) -> Vec<TermEvent> {
         let mut events = Vec::new();
@@ -213,6 +283,10 @@ impl TerminalState {
             grid.cursor = Some((cursor_col, cursor_row as usize));
         }
 
+        // Selection range in grid coordinates — alacritty resolves the
+        // content-anchored selection against the current viewport.
+        let selection_range = content.selection;
+
         for cell in content.display_iter {
             let col = cell.point.column.0;
             let row_i = cell.point.line.0 + display_offset;
@@ -225,10 +299,17 @@ impl TerminalState {
                 continue;
             }
 
+            let selected = selection_range
+                .map(|range| range.contains(cell.point))
+                .unwrap_or(false);
+
             let fg = self.convert_color(cell.fg);
             let bg = self.convert_color(cell.bg);
 
             let mut flags = CellFlags::empty();
+            if selected {
+                flags |= CellFlags::SELECTION;
+            }
             if cell
                 .flags
                 .contains(alacritty_terminal::term::cell::Flags::BOLD)
@@ -532,6 +613,66 @@ mod tests {
         assert!(state.is_executing(), "command running");
         state.process_bytes(b"\x1b]133;D;0\x07");
         assert!(!state.is_executing(), "command finished");
+    }
+
+    /// The dogfood finding that forced content-anchored selection: a
+    /// drag that autoscrolls must yield MORE text than one screen, and
+    /// the selection must survive scrolling instead of being cleared.
+    #[test]
+    fn selection_survives_scrolling_and_spans_scrollback() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..60 {
+            state.process_bytes(format!("line {}\r\n", i).as_bytes());
+        }
+
+        // The dogfood gesture: scroll up into history to the top of
+        // the output first...
+        state.scroll_lines(20);
+        // ...anchor at the top visible row...
+        state.start_selection(SelectMode::Char, 0, 0, false);
+        // ...drag to the bottom edge...
+        state.update_selection(79, 23, true);
+        // ...and drag-autoscroll back toward the tail, re-pinning the
+        // head to the bottom edge each step. The anchor stays glued to
+        // its content up in history, so the selection grows.
+        state.scroll_lines(-10);
+        state.update_selection(79, 23, true);
+
+        let text = state.selection_text().expect("selection has text");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines.len() > 24,
+            "selection spans more than one screen: got {} lines",
+            lines.len()
+        );
+
+        // Still selected after further scrolling — content-anchored.
+        state.scroll_lines(5);
+        assert!(state.selection_text().is_some());
+
+        // And the snapshot carries SELECTION flags for visible cells.
+        let grid = state.grid_snapshot();
+        let any_selected = (0..grid.rows)
+            .any(|r| (0..grid.cols).any(|c| grid.get(r, c).flags.contains(CellFlags::SELECTION)));
+        assert!(any_selected, "highlight flags present in the viewport");
+    }
+
+    #[test]
+    fn empty_click_selection_yields_no_text() {
+        let mut state = TerminalState::new(80, 24, 100, ResolvedTheme::default());
+        state.process_bytes(b"hello\r\n");
+        state.start_selection(SelectMode::Char, 2, 0, false);
+        // No drag — degenerate selection copies nothing.
+        assert_eq!(state.selection_text(), None);
+    }
+
+    #[test]
+    fn word_selection_snaps_to_boundaries() {
+        let mut state = TerminalState::new(80, 24, 100, ResolvedTheme::default());
+        state.process_bytes(b"alpha bravo charlie\r\n");
+        // Double-click semantics: land mid-"bravo".
+        state.start_selection(SelectMode::Word, 8, 0, false);
+        assert_eq!(state.selection_text().as_deref(), Some("bravo"));
     }
 
     #[test]

@@ -43,20 +43,15 @@ impl App {
     }
 
     /// Copy the active selection to the system clipboard. Returns true
-    /// if a selection consumed the chord (even if it held only
-    /// whitespace); false lets the caller fall through to whatever the
-    /// key would otherwise do.
+    /// if a selection consumed the chord; false lets the caller fall
+    /// through to whatever the key would otherwise do. The text comes
+    /// from the terminal's content-anchored selection, so it can span
+    /// scrollback well beyond the visible screen.
     pub(super) fn handle_copy(&mut self) -> bool {
-        let Some(sel) = self.selection else {
+        let Some(text) = self.terminal.as_ref().and_then(|t| t.selection_text()) else {
             return false;
         };
-        let Some(grid) = self.snapshot_for_selection() else {
-            return false;
-        };
-        let text = sel.text(&grid);
-        if !text.is_empty() {
-            self.set_clipboard_text(text);
-        }
+        self.set_clipboard_text(text);
         true
     }
 

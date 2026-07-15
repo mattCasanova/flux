@@ -58,15 +58,10 @@ impl App {
             // rendering the next frame.
             self.sync_raw_mode();
 
-            // Cooked mode: new output shifts what the viewport-relative
-            // selection points at — clear rather than highlight the wrong
-            // cells (absolute line identity is v0.3 block-spike work).
-            // Raw mode keeps the selection: alt-screen programs repaint
-            // constantly and clearing would make copying from them
-            // impossible; their content is stationary between repaints.
-            if !self.raw_mode {
-                self.clear_selection();
-            }
+            // Selections are content-anchored (alacritty's model), so
+            // new output does NOT invalidate them — alacritty rotates
+            // the anchors with the scrollback and drops the selection
+            // itself if the content scrolls out of history.
             self.update_display();
         }
     }

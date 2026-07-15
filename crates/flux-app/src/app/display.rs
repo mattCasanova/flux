@@ -17,9 +17,6 @@ impl App {
 
         let grid = terminal.grid_snapshot();
         renderer.set_grid(&grid);
-        // Re-sync the selection overlay: set_grid may have changed the
-        // bottom-anchor shift the highlight rects are positioned with.
-        renderer.set_selection(self.selection.as_ref(), grid.cols);
     }
 
     /// Push the current input editor state to the renderer. If the
@@ -87,6 +84,11 @@ impl App {
     }
 
     pub(super) fn handle_redraw(&mut self) {
+        // Drag-autoscroll advances frame-paced: while a selection drag
+        // rests past the output edge, each redraw scrolls another step
+        // and requests the next frame.
+        self.step_drag_autoscroll();
+
         let Some(renderer) = &mut self.renderer else {
             return;
         };

@@ -88,15 +88,13 @@ impl App {
     }
 
     /// Scroll the output viewport by `lines` (positive = into history)
-    /// and refresh the grid. Clears the selection — its coordinates are
-    /// viewport-relative and would highlight the wrong text after the
-    /// content shifts.
+    /// and refresh the grid. Selections survive: they're anchored to
+    /// content, not viewport rows.
     pub(super) fn scroll_terminal(&mut self, lines: i32) {
         let Some(term) = &mut self.terminal else {
             return;
         };
         term.scroll_lines(lines);
-        self.clear_selection();
         self.update_display();
         self.request_redraw();
     }
@@ -110,7 +108,6 @@ impl App {
         } else {
             term.scroll_page_down();
         }
-        self.clear_selection();
         self.update_display();
         self.request_redraw();
     }

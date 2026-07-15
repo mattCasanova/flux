@@ -259,7 +259,12 @@ impl App {
                     self.request_redraw();
                     return;
                 }
-                if self.selection.is_some() {
+                if self
+                    .terminal
+                    .as_ref()
+                    .map(|t| t.has_selection())
+                    .unwrap_or(false)
+                {
                     self.clear_selection();
                     return;
                 }
