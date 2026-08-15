@@ -6,7 +6,10 @@
 
 mod blocks;
 pub mod pty;
+mod spans;
 pub mod state;
+#[cfg(test)]
+mod zsh_e2e;
 
 /// The terminal's input mode — determines where keystrokes go.
 pub enum InputMode {

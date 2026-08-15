@@ -16,6 +16,13 @@ pub struct ResolvedTheme {
     pub foreground: Color,
     pub background: Color,
     pub cursor: Color,
+    /// Background tint for a completed command's header rows (prompt +
+    /// echo) in the semantic stream. Derived from `background` unless
+    /// the config sets it.
+    pub block_header: Color,
+    /// Header tint for a command that exited nonzero. Derived from
+    /// `block_header` and the red ANSI slot.
+    pub block_failed: Color,
 }
 
 impl ResolvedTheme {
@@ -23,12 +30,44 @@ impl ResolvedTheme {
     pub fn ansi(&self, idx: usize) -> Color {
         self.ansi[idx & 0xf]
     }
+
+    /// The default header tint for a background: nudged a step toward
+    /// the foreground so it reads as "a shade lighter" on dark themes
+    /// and "a shade darker" on light ones.
+    pub fn derive_block_header(background: Color, foreground: Color) -> Color {
+        blend(background, foreground, 0.08)
+    }
+
+    /// The default failed-header tint: the header tint with a little of
+    /// the theme's red in it.
+    pub fn derive_block_failed(block_header: Color, red: Color) -> Color {
+        blend(block_header, red, 0.22)
+    }
+
+    /// Recompute the derived block colors from the current base colors.
+    /// Config resolution calls this after applying overrides to
+    /// `background` / `foreground` / `red`, then applies any explicit
+    /// `block_header` on top.
+    pub fn rederive_block_colors(&mut self) {
+        self.block_header = Self::derive_block_header(self.background, self.foreground);
+        self.block_failed = Self::derive_block_failed(self.block_header, self.ansi(1));
+    }
+}
+
+/// Opaque source-over blend: `base` with `amount` of `tint` on top.
+fn blend(base: Color, tint: Color, amount: f32) -> Color {
+    Color::new(
+        base.r + (tint.r - base.r) * amount,
+        base.g + (tint.g - base.g) * amount,
+        base.b + (tint.b - base.b) * amount,
+        1.0,
+    )
 }
 
 impl Default for ResolvedTheme {
     fn default() -> Self {
         let hex = |s: &str| Color::from_hex(s).expect("built-in palette hex is valid");
-        Self {
+        let mut theme = Self {
             // Tokyo Night Storm
             ansi: [
                 hex("#414868"), // black
@@ -51,6 +90,10 @@ impl Default for ResolvedTheme {
             foreground: hex("#c0caf5"),
             background: hex("#24283b"),
             cursor: hex("#c0caf5"),
-        }
+            block_header: Color::default(),
+            block_failed: Color::default(),
+        };
+        theme.rederive_block_colors();
+        theme
     }
 }

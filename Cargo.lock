@@ -717,11 +717,13 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "flux-shell",
  "flux-types",
  "libc",
  "log",
  "percent-encoding",
  "portable-pty",
+ "tempfile",
 ]
 
 [[package]]

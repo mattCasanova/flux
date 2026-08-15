@@ -48,6 +48,30 @@ pub struct FluxConfig {
     /// resources/default-config.toml.
     #[serde(default)]
     pub scrollback: ScrollbackConfig,
+    /// Additive section (v0.3a semantic stream). Serde-defaulted for
+    /// the same reason as `scrollback`.
+    #[serde(default)]
+    pub blocks: BlocksConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BlocksConfig {
+    /// Master switch for the semantic stream: hide the shell's live
+    /// prompt (Flux's input bar is the prompt), tint completed
+    /// commands' header rows, mark failures. Needs shell integration;
+    /// without it the stream is classic either way.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for BlocksConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -142,6 +166,10 @@ pub struct ThemeConfig {
     /// Cursor color; defaults to `foreground`.
     #[serde(default)]
     pub cursor: Option<String>,
+    /// Header tint for completed commands in the semantic stream
+    /// (prompt + echo rows). Derived from `background` when unset.
+    #[serde(default)]
+    pub block_header: Option<String>,
 }
 
 impl ThemeConfig {
@@ -186,6 +214,18 @@ impl ThemeConfig {
         for (idx, value, key) in ansi_keys {
             apply(&mut theme.ansi[idx], value.as_deref(), key);
         }
+
+        // Block colors follow the (possibly overridden) base colors,
+        // then an explicit header tint wins; the failed tint is
+        // rederived from whichever header color ended up in force.
+        theme.rederive_block_colors();
+        apply(
+            &mut theme.block_header,
+            self.block_header.as_deref(),
+            "block_header",
+        );
+        theme.block_failed =
+            flux_types::ResolvedTheme::derive_block_failed(theme.block_header, theme.ansi(1));
 
         theme
     }

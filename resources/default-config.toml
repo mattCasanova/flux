@@ -78,6 +78,12 @@ bright_magenta = "#d6b4ff"
 bright_cyan    = "#a3e6ff"
 bright_white   = "#e0e6ff"
 
+# Header tint for completed commands (the prompt + command rows of
+# each block in the output). Derived from `background` when unset —
+# a shade lighter on dark themes, a shade darker on light ones.
+# Failed commands get the same tint with a little `red` mixed in.
+# block_header = "#303549"
+
 # Padding color while a full-screen program (vim, Claude Code) runs:
 #   "sync"      adopt the program's background (default; vim fills the
 #               window edge-to-edge)
@@ -93,3 +99,11 @@ lines = 10000
 # Padding tint while scrolled up into history — a quiet "not at the
 # live tail" cue. Any hex color; leave unset for no change.
 # scrolled_background = "#2a2f45"
+
+[blocks]
+# The semantic stream. With shell integration on, Flux hides the
+# shell's own prompt while you type (the input bar below is the
+# prompt), tints each completed command's prompt + command rows as a
+# header, and marks failures in red with the exit code. Set to false
+# for the classic stream with the shell prompt visible.
+enabled = true

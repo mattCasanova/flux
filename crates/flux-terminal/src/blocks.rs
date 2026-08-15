@@ -51,6 +51,25 @@ pub(crate) enum ShellPhase {
     Idle,
 }
 
+/// Something the side parser saw that the row tracker must act on
+/// *at the byte where it happened* — see `TerminalState::process_bytes`
+/// for how the feed is split so the main parser is caught up first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamEvent {
+    /// OSC 133;A — prompt start.
+    PromptStart,
+    /// OSC 133;B — prompt end, user input begins.
+    PromptEnd,
+    /// OSC 133;C — command execution start.
+    OutputStart,
+    /// OSC 133;D[;code] — command finished.
+    CommandEnd(Option<i32>),
+    /// `CSI 3 J` — scrollback history wiped (macOS `clear` sends it).
+    HistoryCleared,
+    /// RIS (`ESC c`) — full terminal reset, screen and history gone.
+    Reset,
+}
+
 /// Side-channel OSC interceptor. See module docs for the design rationale.
 #[derive(Default)]
 pub(crate) struct BlockCapture {
@@ -60,6 +79,9 @@ pub(crate) struct BlockCapture {
     phase: Option<ShellPhase>,
     /// Exit code of the last finished command from OSC 133;D.
     last_exit_code: Option<i32>,
+    /// Events fired since the last `take_events` — drained by the
+    /// terminal after every feed run.
+    events: Vec<StreamEvent>,
 }
 
 impl BlockCapture {
@@ -84,6 +106,16 @@ impl BlockCapture {
 
     pub(crate) fn last_exit_code(&self) -> Option<i32> {
         self.last_exit_code
+    }
+
+    /// Drain the events fired since the last call.
+    pub(crate) fn take_events(&mut self) -> Vec<StreamEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// True if any event fired since the last `take_events`.
+    pub(crate) fn has_events(&self) -> bool {
+        !self.events.is_empty()
     }
 
     /// Parse OSC 7: `\x1b]7;file://hostname/path\x07`
@@ -115,14 +147,17 @@ impl BlockCapture {
         match sub {
             "A" => {
                 self.phase = Some(ShellPhase::Prompt);
+                self.events.push(StreamEvent::PromptStart);
                 log::debug!("OSC 133;A — prompt start");
             }
             "B" => {
                 self.phase = Some(ShellPhase::Input);
+                self.events.push(StreamEvent::PromptEnd);
                 log::debug!("OSC 133;B — command start");
             }
             "C" => {
                 self.phase = Some(ShellPhase::Executing);
+                self.events.push(StreamEvent::OutputStart);
                 log::debug!("OSC 133;C — execution start");
             }
             _ if sub.starts_with("D") => {
@@ -139,6 +174,7 @@ impl BlockCapture {
                             .and_then(|s| s.parse::<i32>().ok())
                     });
                 self.last_exit_code = exit_code;
+                self.events.push(StreamEvent::CommandEnd(exit_code));
                 log::debug!("OSC 133;D — command finished, exit={:?}", exit_code);
             }
             _ => {}
@@ -153,6 +189,31 @@ impl Perform for BlockCapture {
             b"7" => self.handle_osc_7(params),
             b"133" => self.handle_osc_133(params),
             _ => {}
+        }
+    }
+
+    /// `CSI 3 J` wipes scrollback — the row tracker must know, because
+    /// every absolute row it holds is relative to history length.
+    fn csi_dispatch(
+        &mut self,
+        params: &alacritty_terminal::vte::Params,
+        intermediates: &[u8],
+        _ignore: bool,
+        action: char,
+    ) {
+        if action != 'J' || !intermediates.is_empty() {
+            return;
+        }
+        let first = params.iter().next().and_then(|p| p.first().copied());
+        if first == Some(3) {
+            self.events.push(StreamEvent::HistoryCleared);
+        }
+    }
+
+    /// RIS (`ESC c`) resets the whole terminal, history included.
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        if byte == b'c' && intermediates.is_empty() {
+            self.events.push(StreamEvent::Reset);
         }
     }
 }

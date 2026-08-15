@@ -52,12 +52,13 @@ impl App {
         );
 
         // Create terminal state
-        let terminal = TerminalState::new(
+        let mut terminal = TerminalState::new(
             cols.max(1),
             rows.max(1),
             self.config.scrollback.lines,
             self.config.theme.resolve(),
         );
+        terminal.set_blocks_enabled(self.config.blocks.enabled);
 
         // Spawn the PTY with matching dimensions. Shell integration is
         // installed invisibly where the shell supports it: zsh gets a

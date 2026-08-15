@@ -14,6 +14,23 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
 use flux_types::{CellData, CellFlags, Color, ResolvedTheme, TerminalGrid};
 
+use crate::blocks::{BlockCapture, ShellPhase, StreamEvent};
+use crate::spans::{AbsRow, Span, SpanTracker};
+
+/// Extra history rows allocated above the configured scrollback. Lines
+/// pushed into history are only observable while history is below its
+/// ceiling (alacritty drops silently at the cap), so we keep the cap
+/// this far above the configured size and truncate back down after
+/// every feed step — the truncated count is exact. Must exceed the lines
+/// one `FEED_STEP` can push (one per LF, so ≥ FEED_STEP), with headroom
+/// for a row-shrinking resize (≤ screen rows). Memory: transient, up to
+/// this many extra rows above the configured scrollback.
+pub const HISTORY_SLACK: usize = 1024;
+
+/// Bytes fed between history checks. Bounds the lines one step can push
+/// (one per LF in real output) so it stays under `HISTORY_SLACK`.
+const FEED_STEP: usize = 512;
+
 /// How a mouse gesture groups cells — mapped onto alacritty's
 /// selection machinery (which anchors to CONTENT in absolute
 /// scrollback coordinates, so selections survive scrolling and can
@@ -40,8 +57,6 @@ impl SelectMode {
         }
     }
 }
-
-use crate::blocks::{BlockCapture, ShellPhase};
 
 /// Events that alacritty_terminal sends back (bell, title change, etc.)
 #[derive(Debug)]
@@ -108,6 +123,40 @@ impl Dimensions for TermDimensions {
     }
 }
 
+/// The live prompt's rows (grid coordinates) and the display-offset
+/// bump that pulls them off the bottom of the viewport.
+#[derive(Debug, Clone, Copy)]
+struct HiddenPrompt {
+    start_line: i64,
+    end_line: i64,
+    bump: usize,
+}
+
+/// End (exclusive) of the side-parser run starting at `start`. A run
+/// ends right *after* a byte that can terminate an OSC (`BEL`, `\\`,
+/// `0x9c`) or right *before* a byte that introduces an escape sequence
+/// (`ESC`, 8-bit DCS/CSI/OSC), so every control sequence sits at the
+/// head of its run and every OSC completes exactly at a run end.
+fn run_end(bytes: &[u8], start: usize) -> usize {
+    let is_terminator = |b: u8| matches!(b, 0x07 | b'\\' | 0x9c);
+    let is_introducer = |b: u8| matches!(b, 0x1b | 0x90 | 0x9b | 0x9d);
+    // An introducer at the head belongs to this run.
+    let scan = if is_introducer(bytes[start]) {
+        start + 1
+    } else {
+        start
+    };
+    for (offset, &b) in bytes[scan..].iter().enumerate() {
+        if is_terminator(b) {
+            return scan + offset + 1;
+        }
+        if is_introducer(b) {
+            return scan + offset;
+        }
+    }
+    bytes.len()
+}
+
 /// Wraps alacritty_terminal with a clean API.
 pub struct TerminalState {
     term: Term<EventProxy>,
@@ -121,6 +170,20 @@ pub struct TerminalState {
     /// machine from `parser` — both see the exact same `&[u8]` but
     /// neither affects the other.
     block_parser: vte::Parser,
+    /// Absolute-row bookkeeping for prompt/command spans (v0.3a).
+    tracker: SpanTracker,
+    /// Configured scrollback; the grid is allocated `HISTORY_SLACK`
+    /// above this and truncated back after every feed step.
+    scrollback_cap: usize,
+    /// Primary-grid history size after the last settle — the value to
+    /// trust while the alt screen is active (its grid has no history).
+    last_history: usize,
+    /// Extra display offset the last snapshot applied to pull the hidden
+    /// live prompt off the bottom of the viewport. Mouse mapping adds it.
+    hidden_bump: usize,
+    /// Master switch for the semantic stream (prompt hiding + span
+    /// decoration). Off = classic stream.
+    blocks_enabled: bool,
     /// Resolved color palette for named/indexed ANSI colors.
     theme: ResolvedTheme,
     event_rx: mpsc::Receiver<TermEvent>,
@@ -136,7 +199,7 @@ impl TerminalState {
         let event_proxy = EventProxy { tx };
 
         let config = TermConfig {
-            scrolling_history: scrollback_lines,
+            scrolling_history: scrollback_lines + HISTORY_SLACK,
             ..TermConfig::default()
         };
         let dims = TermDimensions { cols, rows };
@@ -149,31 +212,147 @@ impl TerminalState {
             theme,
             block_capture: BlockCapture::new(),
             block_parser: vte::Parser::new(),
+            tracker: SpanTracker::new(),
+            scrollback_cap: scrollback_lines,
+            last_history: 0,
+            hidden_bump: 0,
+            blocks_enabled: true,
             event_rx: rx,
             cols,
             rows,
         }
     }
 
+    /// Enable or disable the semantic stream (live-prompt hiding and
+    /// span decoration). Row tracking keeps running either way so
+    /// flipping it on later has history to work with.
+    pub fn set_blocks_enabled(&mut self, enabled: bool) {
+        self.blocks_enabled = enabled;
+    }
+
+    pub fn blocks_enabled(&self) -> bool {
+        self.blocks_enabled
+    }
+
     /// Feed raw PTY output bytes into the terminal parser.
     ///
-    /// Two parsers run in parallel over the same byte slice:
-    /// - `self.parser.advance(&mut self.term, bytes)` is the main
-    ///   path — it drives alacritty's grid, cursor, and scrollback.
-    ///   Unchanged from before R3.
-    /// - `self.block_parser.advance(&mut self.block_capture, bytes)`
-    ///   is the side path — a stock `vte::Parser` with its own
-    ///   state machine, feeding a `Perform` impl that exists only
-    ///   to intercept OSC 7 (cwd) and OSC 133 (prompt/exit). R3
-    ///   lands this as a no-op foundation; F4/F8 add the real
-    ///   handling.
+    /// Two parsers run over the same bytes:
+    /// - `self.parser` drives alacritty's grid, cursor, and scrollback.
+    /// - `self.block_parser` drives `BlockCapture`, a stock `vte::Parser`
+    ///   that only exists to intercept OSC 7 / OSC 133 (and the two
+    ///   history-wiping controls). See `blocks.rs` for why alacritty's
+    ///   own layer can't see them.
     ///
-    /// The two parsers are independent — feeding bytes to one does
-    /// not affect the other's state. Running both is sub-microsecond
-    /// per KB (see module docs for the perf rationale).
+    /// The side parser runs *first*, in runs split at bytes that can end
+    /// an OSC (`BEL`, `\\`, `0x9c`) or start an escape sequence. When a
+    /// run fires an event, the main parser is caught up to that exact
+    /// byte before the event is acted on, so the cursor row and history
+    /// size read at that moment are the ones the marker landed on. Runs
+    /// that fire nothing cost one cheap side-parser call; the main parser
+    /// still sees the bytes in bulk.
+    ///
+    /// Bytes are also stepped in `FEED_STEP` slices with a history settle
+    /// between them — see `HISTORY_SLACK`.
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
-        self.block_parser.advance(&mut self.block_capture, bytes);
+        for step in bytes.chunks(FEED_STEP) {
+            self.feed_step(step);
+            self.settle_history();
+        }
+    }
+
+    fn feed_step(&mut self, bytes: &[u8]) {
+        let mut main_start = 0;
+        let mut i = 0;
+        while i < bytes.len() {
+            let end = run_end(bytes, i);
+            self.block_parser
+                .advance(&mut self.block_capture, &bytes[i..end]);
+            if self.block_capture.has_events() {
+                // "Before" state = the main parser caught up to the run
+                // start; the run itself holds at most one control
+                // sequence and it sits at the run's head, so nothing in
+                // the run precedes it.
+                self.parser.advance(&mut self.term, &bytes[main_start..i]);
+                let history_before = self.tracked_history();
+                self.parser.advance(&mut self.term, &bytes[i..end]);
+                main_start = end;
+                let events = self.block_capture.take_events();
+                self.apply_stream_events(&events, history_before);
+            }
+            i = end;
+        }
+        self.parser.advance(&mut self.term, &bytes[main_start..]);
+    }
+
+    /// Primary-grid history size — live when the primary grid is
+    /// active, the last settled value while an alt-screen program owns
+    /// the display (the alt grid reports 0).
+    fn tracked_history(&self) -> usize {
+        if self.is_alt_screen() {
+            self.last_history
+        } else {
+            self.term.grid().history_size()
+        }
+    }
+
+    /// Record marker rows / apply history wipes for events the side
+    /// parser just fired, with the main parser caught up to them.
+    fn apply_stream_events(&mut self, events: &[StreamEvent], history_before: usize) {
+        for &event in events {
+            match event {
+                StreamEvent::HistoryCleared => {
+                    if !self.is_alt_screen() {
+                        self.tracker.history_cleared(history_before);
+                    }
+                }
+                StreamEvent::Reset => {
+                    // RIS also leaves the alt screen, so by now the
+                    // primary grid is active (and empty).
+                    self.tracker.reset(history_before);
+                }
+                marker => {
+                    // Markers only mean something on the primary grid.
+                    if self.is_alt_screen() {
+                        continue;
+                    }
+                    let cursor = self.term.grid().cursor.point;
+                    let row = self
+                        .tracker
+                        .abs(self.term.grid().history_size(), cursor.line.0);
+                    match marker {
+                        StreamEvent::PromptStart => self.tracker.prompt_start(row),
+                        StreamEvent::PromptEnd => self.tracker.prompt_end(row, cursor.column.0),
+                        StreamEvent::OutputStart => self.tracker.output_start(row),
+                        StreamEvent::CommandEnd(code) => self.tracker.command_end(row, code),
+                        StreamEvent::HistoryCleared | StreamEvent::Reset => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Keep history observable: truncate anything above the configured
+    /// cap (counting exactly what went), and notice if the ceiling was
+    /// hit — meaning some drops went uncounted.
+    fn settle_history(&mut self) {
+        if self.is_alt_screen() {
+            return;
+        }
+        let history = self.term.grid().history_size();
+        if history >= self.scrollback_cap + HISTORY_SLACK {
+            log::warn!(
+                "history ceiling hit in one feed step ({history} lines); span tracking reset"
+            );
+            self.tracker.tracking_lost();
+        }
+        if history > self.scrollback_cap {
+            let excess = history - self.scrollback_cap;
+            let grid = self.term.grid_mut();
+            grid.update_history(self.scrollback_cap);
+            grid.update_history(self.scrollback_cap + HISTORY_SLACK);
+            self.tracker.history_dropped(excess);
+        }
+        self.last_history = self.term.grid().history_size();
     }
 
     pub fn cols(&self) -> usize {
@@ -214,9 +393,11 @@ impl TerminalState {
 
     /// Convert a viewport cell to alacritty grid coordinates (absolute
     /// within the visible+history window): grid line = viewport row −
-    /// display offset.
+    /// (display offset + the hidden-prompt bump the last snapshot
+    /// applied, so clicks land on what was actually painted).
     fn viewport_to_point(&self, col: usize, row: usize) -> Point {
-        let line = Line(row as i32 - self.display_offset() as i32);
+        let offset = self.display_offset() + self.hidden_bump;
+        let line = Line(row as i32 - offset as i32);
         Point::new(line, Column(col.min(self.cols.saturating_sub(1))))
     }
 
@@ -263,7 +444,47 @@ impl TerminalState {
     }
 
     /// Snapshot the current terminal grid for rendering.
-    pub fn grid_snapshot(&self) -> TerminalGrid {
+    ///
+    /// With the semantic stream on and the shell waiting at a prompt,
+    /// the live prompt rows are pulled off the bottom of the viewport
+    /// (see `HiddenPrompt`) and `grid.cursor` reports the row above them
+    /// as the bottom-anchor row. Completed spans get their header rows
+    /// tinted, the command echo bold, and failed commands a red tint plus
+    /// `✘ code` at the right edge. `grid.display_offset` stays the
+    /// user's own scroll offset — the hidden-prompt bump is invisible to
+    /// scroll logic and only folded into mouse mapping via
+    /// `viewport_to_point`.
+    pub fn grid_snapshot(&mut self) -> TerminalGrid {
+        let user_offset = self.display_offset();
+        let hidden = self.hidden_prompt();
+        let bump = hidden.map(|h| h.bump).unwrap_or(0);
+        self.hidden_bump = 0;
+        if bump > 0 {
+            self.term.scroll_display(Scroll::Delta(bump as i32));
+            self.hidden_bump = self.display_offset() - user_offset;
+        }
+
+        let mut grid = self.snapshot_viewport();
+        grid.display_offset = user_offset;
+
+        if self.blocks_enabled && !self.is_alt_screen() {
+            let offset = user_offset + self.hidden_bump;
+            self.decorate_spans(&mut grid, offset);
+            if let Some(hidden) = hidden {
+                self.blank_hidden_prompt(&mut grid, hidden, offset);
+            }
+        }
+
+        if self.hidden_bump > 0 {
+            self.term
+                .scroll_display(Scroll::Delta(-(self.hidden_bump as i32)));
+        }
+        grid
+    }
+
+    /// Plain viewport → `TerminalGrid` conversion at alacritty's current
+    /// display offset.
+    fn snapshot_viewport(&self) -> TerminalGrid {
         let content = self.term.renderable_content();
         let mut grid = TerminalGrid::new(self.cols, self.rows);
         // Alacritty's display_iter yields points in GRID coordinates,
@@ -310,40 +531,23 @@ impl TerminalState {
             if selected {
                 flags |= CellFlags::SELECTION;
             }
-            if cell
-                .flags
-                .contains(alacritty_terminal::term::cell::Flags::BOLD)
-            {
+            use alacritty_terminal::term::cell::Flags;
+            if cell.flags.contains(Flags::BOLD) {
                 flags |= CellFlags::BOLD;
             }
-            if cell
-                .flags
-                .contains(alacritty_terminal::term::cell::Flags::ITALIC)
-            {
+            if cell.flags.contains(Flags::ITALIC) {
                 flags |= CellFlags::ITALIC;
             }
-            if cell
-                .flags
-                .contains(alacritty_terminal::term::cell::Flags::UNDERLINE)
-            {
+            if cell.flags.contains(Flags::UNDERLINE) {
                 flags |= CellFlags::UNDERLINE;
             }
-            if cell
-                .flags
-                .contains(alacritty_terminal::term::cell::Flags::HIDDEN)
-            {
+            if cell.flags.contains(Flags::HIDDEN) {
                 flags |= CellFlags::HIDDEN;
             }
-            if cell
-                .flags
-                .contains(alacritty_terminal::term::cell::Flags::DIM_BOLD)
-            {
+            if cell.flags.contains(Flags::DIM_BOLD) {
                 flags |= CellFlags::DIM;
             }
-            if cell
-                .flags
-                .contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR)
-            {
+            if cell.flags.contains(Flags::WIDE_CHAR) {
                 flags |= CellFlags::WIDE_CHAR;
             }
 
@@ -360,6 +564,145 @@ impl TerminalState {
         }
 
         grid
+    }
+
+    /// The live prompt's rows in grid coordinates, if it should be
+    /// hidden right now, plus how far to bump the display offset so
+    /// those rows leave the bottom of the viewport.
+    fn hidden_prompt(&self) -> Option<HiddenPrompt> {
+        if !self.blocks_enabled || self.is_alt_screen() {
+            return None;
+        }
+        let (start, end) = self.tracker.live_prompt()?;
+        let history = self.term.grid().history_size();
+        let start_line = self.tracker.line(history, start);
+        let end_line = self.tracker.line(history, end);
+        // Only a prompt sitting on the live screen pulls the viewport
+        // up; one that scrolled into history (background output after
+        // the prompt) is just blanked where it shows.
+        let bump = if (0..self.rows as i64).contains(&start_line) {
+            self.rows - start_line as usize
+        } else {
+            0
+        };
+        Some(HiddenPrompt {
+            start_line,
+            end_line,
+            bump,
+        })
+    }
+
+    /// Blank the live prompt rows still inside the viewport and move the
+    /// bottom-anchor row to the last row above them.
+    fn blank_hidden_prompt(&self, grid: &mut TerminalGrid, hidden: HiddenPrompt, offset: usize) {
+        let blank = CellData {
+            character: ' ',
+            fg: self.theme.foreground,
+            bg: self.theme.background,
+            flags: CellFlags::empty(),
+        };
+        let first_row = hidden.start_line + offset as i64;
+        let last_row = hidden.end_line + offset as i64;
+        for row in first_row.max(0)..=last_row.min(self.rows as i64 - 1) {
+            for col in 0..self.cols {
+                grid.set(row as usize, col, blank);
+            }
+        }
+        // Anchor: the row above the prompt when it's in view; when the
+        // prompt sits below the viewport (bump pulled it off) the whole
+        // viewport is content and the renderer's default anchor
+        // (bottom row) is right; when it's at the very top there is no
+        // content to anchor.
+        grid.cursor = if first_row >= self.rows as i64 {
+            None
+        } else if first_row > 0 {
+            Some((0, first_row as usize - 1))
+        } else {
+            None
+        };
+    }
+
+    /// Tint completed / running spans' header rows, embolden the echo,
+    /// and mark failures.
+    fn decorate_spans(&self, grid: &mut TerminalGrid, offset: usize) {
+        let history = self.term.grid().history_size();
+        let rows = self.rows as i64;
+        // Visible absolute rows: [lo, hi).
+        let lo = self.tracker.abs(history, -(offset as i32));
+        let hi = lo + rows;
+        for span in self.tracker.spans() {
+            if span.at_prompt() {
+                continue; // the live prompt is hidden, not decorated
+            }
+            let header_end = span.header_end();
+            if header_end <= lo || span.prompt_start >= hi {
+                continue;
+            }
+            self.decorate_header(grid, span, lo, header_end);
+        }
+    }
+
+    fn decorate_header(
+        &self,
+        grid: &mut TerminalGrid,
+        span: &Span,
+        lo: AbsRow,
+        header_end: AbsRow,
+    ) {
+        let failed = span.exit_code.is_some_and(|code| code != 0);
+        let tint = if failed {
+            self.theme.block_failed
+        } else {
+            self.theme.block_header
+        };
+        let default_bg = self.theme.background;
+        let rows = self.rows as i64;
+
+        for abs in span.prompt_start.max(lo)..header_end.min(lo + rows) {
+            let row = (abs - lo) as usize;
+            for col in 0..self.cols {
+                let cell = grid.get(row, col);
+                if cell.bg == default_bg {
+                    let mut tinted = *cell;
+                    tinted.bg = tint;
+                    grid.set(row, col, tinted);
+                }
+            }
+        }
+
+        // Command echo: from the prompt's end through the last header row.
+        if let Some((echo_row, echo_col)) = span.prompt_end {
+            for abs in echo_row.max(lo)..header_end.min(lo + rows) {
+                let row = (abs - lo) as usize;
+                let from = if abs == echo_row { echo_col } else { 0 };
+                for col in from..self.cols {
+                    let mut cell = *grid.get(row, col);
+                    cell.flags |= CellFlags::BOLD;
+                    grid.set(row, col, cell);
+                }
+            }
+        }
+
+        // `✘ code` at the right edge of the first header row, only if
+        // that space is blank (a right prompt lives there otherwise).
+        if failed && span.prompt_start >= lo && span.prompt_start < lo + rows {
+            let row = (span.prompt_start - lo) as usize;
+            let label = format!("✘ {}", span.exit_code.unwrap_or(0));
+            let width = label.chars().count() + 1;
+            if width <= self.cols {
+                let start_col = self.cols - width;
+                let blank = (start_col..self.cols).all(|col| grid.get(row, col).character == ' ');
+                if blank {
+                    for (i, ch) in label.chars().enumerate() {
+                        let mut cell = *grid.get(row, start_col + i);
+                        cell.character = ch;
+                        cell.fg = self.theme.ansi(1);
+                        cell.flags |= CellFlags::BOLD;
+                        grid.set(row, start_col + i, cell);
+                    }
+                }
+            }
+        }
     }
 
     /// The shell's current working directory, if known via OSC 7.
@@ -439,12 +782,67 @@ impl TerminalState {
             && self.block_capture.shell_phase() == ShellPhase::Executing
     }
 
-    /// Resize the terminal grid.
+    #[cfg(test)]
+    pub(crate) fn tracker(&self) -> &SpanTracker {
+        &self.tracker
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tracker_live_prompt(&self) -> Option<(AbsRow, AbsRow)> {
+        self.tracker.live_prompt()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_spans(&self) -> Vec<Span> {
+        self.tracker.spans().copied().collect()
+    }
+
+    /// Text of one grid line (grid coordinates: 0 = top of screen,
+    /// negative = history), trailing blanks trimmed.
+    #[cfg(test)]
+    pub(crate) fn row_text(&self, line: i32) -> String {
+        let row = &self.term.grid()[Line(line)];
+        (0..self.cols)
+            .map(|c| row[Column(c)].c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// `row_text` addressed by absolute row.
+    #[cfg(test)]
+    pub(crate) fn debug_row_text_abs(&self, abs: AbsRow) -> String {
+        let history = self.term.grid().history_size();
+        self.row_text(self.tracker.line(history, abs) as i32)
+    }
+
+    /// Text of a viewport row of a snapshot, trailing blanks trimmed.
+    #[cfg(test)]
+    fn grid_row_text(grid: &TerminalGrid, row: usize) -> String {
+        (0..grid.cols)
+            .map(|c| grid.get(row, c).character)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// Resize the terminal grid. A column change reflows history, which
+    /// no row identity survives (alacritty drops its selection for the
+    /// same reason) — spans are cleared and the live prompt re-marks on
+    /// zle's redraw. A row-only change moves lines between screen and
+    /// history without creating or destroying content rows, so absolute
+    /// rows stay valid (regression-tested below).
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        let cols_changed = cols != self.cols;
         self.cols = cols;
         self.rows = rows;
         let dims = TermDimensions { cols, rows };
         self.term.resize(dims);
+        if cols_changed {
+            self.tracker.columns_changed();
+        }
+        // Shrinking rows pushes lines into history — count them.
+        self.settle_history();
     }
 
     /// Convert an alacritty color to our Color type.
@@ -683,5 +1081,369 @@ mod tests {
         }
         state.scroll_lines(10);
         assert_eq!(state.display_offset(), 0, "no history to scroll into");
+    }
+
+    // ---- semantic stream (v0.3a) ----
+
+    const A: &[u8] = b"\x1b]133;A\x1b\\";
+    const B: &[u8] = b"\x1b]133;B\x1b\\";
+    const C: &[u8] = b"\x1b]133;C\x1b\\";
+
+    fn d(code: i32) -> Vec<u8> {
+        format!("\x1b]133;D;{code}\x1b\\").into_bytes()
+    }
+
+    /// One full cycle: prompt on `prompt` (may hold a newline for a
+    /// two-line prompt), echo `cmd`, `output` lines, exit `code`.
+    fn cycle(state: &mut TerminalState, prompt: &str, cmd: &str, output: &[&str], code: i32) {
+        state.process_bytes(A);
+        state.process_bytes(prompt.as_bytes());
+        state.process_bytes(B);
+        state.process_bytes(cmd.as_bytes());
+        state.process_bytes(b"\r\n");
+        state.process_bytes(C);
+        for line in output {
+            state.process_bytes(format!("{line}\r\n").as_bytes());
+        }
+        state.process_bytes(&d(code));
+    }
+
+    #[test]
+    fn run_end_splits_at_osc_terminators_and_escape_heads() {
+        let bytes = b"ab\x1b]133;A\x1b\\cd\x07e";
+        // "ab" ends before ESC.
+        assert_eq!(run_end(bytes, 0), 2);
+        // ESC ] 1 3 3 ; A — ends before the ST's ESC.
+        assert_eq!(run_end(bytes, 2), 9);
+        // ESC \\ — head ESC belongs to the run, backslash terminates.
+        assert_eq!(run_end(bytes, 9), 11);
+        // "cd" BEL — BEL is inclusive.
+        assert_eq!(run_end(bytes, 11), 14);
+        assert_eq!(run_end(bytes, 14), 15);
+    }
+
+    #[test]
+    fn markers_record_the_row_and_column_they_fired_on() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(b"banner\r\n"); // row 0
+        cycle(&mut state, "~/src ❯ ", "ls", &["a", "b", "c"], 0);
+        let spans: Vec<Span> = state.tracker().spans().copied().collect();
+        assert_eq!(spans.len(), 1);
+        let span = spans[0];
+        assert_eq!(span.prompt_start, 1, "A fired on row 1");
+        assert_eq!(span.prompt_end, Some((1, 8)), "B after the 8-cell prompt");
+        assert_eq!(span.output_start, Some(2), "C on the row after the echo");
+        assert_eq!(span.end, Some(5), "D after three output rows");
+        assert_eq!(span.exit_code, Some(0));
+        assert_eq!(state.row_text(1), "~/src ❯ ls");
+        assert_eq!(state.row_text(2), "a");
+    }
+
+    #[test]
+    fn two_line_prompt_records_both_rows() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(A);
+        state.process_bytes(b"~/src on main\r\n\xe2\x9d\xaf ");
+        state.process_bytes(B);
+        assert_eq!(state.tracker().live_prompt(), Some((0, 1)));
+        let span = state.tracker().spans().next().copied().unwrap();
+        assert_eq!(span.prompt_end, Some((1, 2)));
+    }
+
+    #[test]
+    fn marker_rows_survive_scrolling_and_history_drops() {
+        // Tiny cap so truncation actually happens; the slack above it
+        // keeps drops countable.
+        let mut state = TerminalState::new(80, 24, 40, ResolvedTheme::default());
+        cycle(&mut state, "P1> ", "first", &["out1"], 0);
+        let span = state.tracker().spans().next().copied().unwrap();
+        assert_eq!(span.prompt_start, 0);
+
+        // Push 30 more lines: the prompt row is now in history.
+        for i in 0..30 {
+            state.process_bytes(format!("filler {i}\r\n").as_bytes());
+        }
+        let history = state.term.grid().history_size();
+        let line = state.tracker().line(history, span.prompt_start);
+        assert!(line < 0, "prompt row scrolled into history: {line}");
+        assert_eq!(state.row_text(line as i32), "P1> first");
+
+        // Push far past the cap in one call: history is truncated back
+        // to 40 in steps and the drops are counted exactly.
+        for i in 0..500 {
+            state.process_bytes(format!("more {i}\r\n").as_bytes());
+        }
+        assert!(state.term.grid().history_size() <= 40 + HISTORY_SLACK);
+        assert!(state.tracker().dropped() > 0, "drops were counted");
+        // The old span's rows are gone from the retained window.
+        assert!(
+            state
+                .tracker()
+                .spans()
+                .all(|s| s.prompt_start >= state.tracker().dropped() || !s.is_closed()),
+            "closed spans below the retained window are pruned"
+        );
+        // A fresh cycle at the tail still maps to real content.
+        cycle(&mut state, "P2> ", "second", &["out2"], 3);
+        let last = state.tracker().spans().last().copied().unwrap();
+        let history = state.term.grid().history_size();
+        let line = state.tracker().line(history, last.prompt_start);
+        assert_eq!(state.row_text(line as i32), "P2> second");
+        assert_eq!(state.row_text(line as i32 + 1), "out2");
+    }
+
+    #[test]
+    fn history_cleared_keeps_screen_row_identity() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "P> ", "old", &["gone"], 0);
+        for i in 0..30 {
+            state.process_bytes(format!("filler {i}\r\n").as_bytes());
+        }
+        // Live prompt at the bottom of the screen.
+        state.process_bytes(A);
+        state.process_bytes(b"P> ");
+        state.process_bytes(B);
+        let (start, _) = state.tracker().live_prompt().unwrap();
+        let history_before = state.term.grid().history_size();
+        assert!(history_before > 0);
+        let line_before = state.tracker().line(history_before, start);
+
+        // macOS `clear` tail: wipe history only.
+        state.process_bytes(b"\x1b[3J");
+        assert_eq!(state.term.grid().history_size(), 0);
+        let line_after = state.tracker().line(0, start);
+        assert_eq!(line_after, line_before, "screen row keeps its identity");
+        assert_eq!(state.row_text(line_after as i32), "P>");
+        assert_eq!(state.tracker().spans().count(), 1, "history span pruned");
+    }
+
+    #[test]
+    fn full_reset_drops_all_spans() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "P> ", "cmd", &["x"], 0);
+        state.process_bytes(A);
+        state.process_bytes(b"\x1bc");
+        assert_eq!(state.tracker().spans().count(), 0);
+    }
+
+    #[test]
+    fn row_resize_keeps_span_rows_column_resize_drops_them() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..40 {
+            state.process_bytes(format!("filler {i}\r\n").as_bytes());
+        }
+        cycle(&mut state, "P> ", "cmd", &["out"], 0);
+        let span = state.tracker().spans().next().copied().unwrap();
+
+        // Grow rows: lines are pulled from history onto the screen.
+        state.resize(80, 30);
+        let history = state.term.grid().history_size();
+        let line = state.tracker().line(history, span.prompt_start);
+        assert_eq!(state.row_text(line as i32), "P> cmd", "after growing rows");
+        assert_eq!(state.row_text(line as i32 + 1), "out");
+
+        // Shrink rows: lines are pushed into history.
+        state.resize(80, 12);
+        let history = state.term.grid().history_size();
+        let line = state.tracker().line(history, span.prompt_start);
+        assert_eq!(
+            state.row_text(line as i32),
+            "P> cmd",
+            "after shrinking rows"
+        );
+
+        // Column change reflows: spans go, tracking continues.
+        state.resize(60, 12);
+        assert_eq!(state.tracker().spans().count(), 0);
+        cycle(&mut state, "P> ", "again", &["y"], 0);
+        assert_eq!(state.tracker().spans().count(), 1);
+    }
+
+    #[test]
+    fn live_prompt_is_pulled_off_the_bottom_when_screen_is_full() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..40 {
+            state.process_bytes(format!("line {i}\r\n").as_bytes());
+        }
+        // Prompt lands on the bottom row (23).
+        state.process_bytes(A);
+        state.process_bytes(b"~ \xe2\x9d\xaf ");
+        state.process_bytes(B);
+        assert_eq!(
+            state.tracker().live_prompt(),
+            Some((
+                {
+                    let h = state.term.grid().history_size();
+                    state.tracker().abs(h, 23)
+                },
+                {
+                    let h = state.term.grid().history_size();
+                    state.tracker().abs(h, 23)
+                }
+            ))
+        );
+
+        let grid = state.grid_snapshot();
+        assert_eq!(grid.display_offset, 0, "user offset untouched");
+        assert_eq!(
+            TerminalState::grid_row_text(&grid, 23),
+            "line 39",
+            "last output line sits on the bottom row"
+        );
+        assert_eq!(
+            grid.cursor, None,
+            "prompt is below the viewport → default anchor"
+        );
+        // The offset was restored after the snapshot.
+        assert_eq!(state.display_offset(), 0);
+        // Mouse mapping folds the bump in: viewport row 23 → the row
+        // holding "line 39".
+        state.start_selection(SelectMode::Line, 0, 23, false);
+        assert_eq!(state.selection_text().as_deref(), Some("line 39\n"));
+    }
+
+    #[test]
+    fn live_prompt_in_short_session_anchors_above_it() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(b"one\r\ntwo\r\n");
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 1), "two");
+        assert_eq!(
+            TerminalState::grid_row_text(&grid, 2),
+            "",
+            "prompt row blanked"
+        );
+        assert_eq!(grid.cursor, Some((0, 1)), "anchor on the last output row");
+    }
+
+    #[test]
+    fn first_prompt_of_a_session_hides_entirely() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "");
+        assert_eq!(grid.cursor, None);
+    }
+
+    #[test]
+    fn prompt_reappears_as_header_once_command_runs() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        state.process_bytes(b"sleep 1\r\n");
+        state.process_bytes(C);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >sleep 1");
+        let theme = ResolvedTheme::default();
+        assert_eq!(grid.get(0, 0).bg, theme.block_header, "header tinted");
+        assert!(grid.get(0, 3).flags.contains(CellFlags::BOLD), "echo bold");
+        assert!(
+            !grid.get(0, 0).flags.contains(CellFlags::BOLD),
+            "prompt not bold"
+        );
+        assert_eq!(
+            grid.cursor,
+            Some((0, 1)),
+            "real cursor row anchors while running"
+        );
+    }
+
+    #[test]
+    fn failed_command_gets_red_header_and_exit_label() {
+        let mut state = TerminalState::new(40, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "P> ", "false", &[], 1);
+        cycle(&mut state, "P> ", "true", &["ok"], 0);
+        let theme = ResolvedTheme::default();
+        let grid = state.grid_snapshot();
+        // Row 0: failed header.
+        assert_eq!(grid.get(0, 0).bg, theme.block_failed);
+        let tail: String = (36..40).map(|c| grid.get(0, c).character).collect();
+        assert_eq!(tail, "✘ 1 ");
+        assert_eq!(grid.get(0, 36).fg, theme.ansi(1));
+        // Row 1: successful header, no label.
+        assert_eq!(grid.get(1, 0).bg, theme.block_header);
+        let tail: String = (36..40).map(|c| grid.get(1, c).character).collect();
+        assert_eq!(tail, "    ");
+        // Row 2: output, untinted.
+        assert_eq!(TerminalState::grid_row_text(&grid, 2), "ok");
+        assert_eq!(grid.get(2, 0).bg, theme.background);
+    }
+
+    #[test]
+    fn exit_label_yields_to_a_right_prompt() {
+        let mut state = TerminalState::new(20, 24, 1000, ResolvedTheme::default());
+        // Prompt fills the row to the right edge (RPROMPT-style).
+        cycle(&mut state, "P>             14:02", "", &[], 2);
+        let grid = state.grid_snapshot();
+        let tail: String = (15..20).map(|c| grid.get(0, c).character).collect();
+        assert_eq!(tail, "14:02", "no room → no label");
+        assert_eq!(grid.get(0, 0).bg, ResolvedTheme::default().block_failed);
+    }
+
+    #[test]
+    fn blocks_disabled_leaves_the_stream_plain() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.set_blocks_enabled(false);
+        cycle(&mut state, "P> ", "false", &[], 1);
+        state.process_bytes(A);
+        state.process_bytes(b"P> ");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        let theme = ResolvedTheme::default();
+        assert_eq!(grid.get(0, 0).bg, theme.background);
+        assert_eq!(
+            TerminalState::grid_row_text(&grid, 1),
+            "P>",
+            "live prompt visible"
+        );
+        assert_eq!(grid.cursor, Some((3, 1)));
+    }
+
+    #[test]
+    fn alt_screen_ignores_markers_and_hiding() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(A);
+        state.process_bytes(b"P> ");
+        state.process_bytes(B);
+        state.process_bytes(b"vim\r\n");
+        state.process_bytes(C);
+        state.process_bytes(b"\x1b[?1049h"); // enter alt screen
+        state.process_bytes(A); // a stray marker inside the program
+        assert!(state.is_alt_screen());
+        assert_eq!(
+            state.tracker().spans().count(),
+            1,
+            "no new span from alt screen"
+        );
+        let grid = state.grid_snapshot();
+        assert!(grid.cursor.is_some(), "alt screen keeps the real cursor");
+        state.process_bytes(b"\x1b[?1049l");
+        assert!(!state.is_alt_screen());
+        state.process_bytes(&d(0));
+        assert!(state.tracker().spans().next().unwrap().is_closed());
+    }
+
+    #[test]
+    fn scrolled_up_view_still_hides_live_prompt_and_keeps_offset() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..60 {
+            state.process_bytes(format!("line {i}\r\n").as_bytes());
+        }
+        state.process_bytes(A);
+        state.process_bytes(b"P> ");
+        state.process_bytes(B);
+        state.scroll_lines(10);
+        let grid = state.grid_snapshot();
+        assert_eq!(grid.display_offset, 10);
+        // Bump 1 on top of the user's 10: 61 content rows, viewport is
+        // rows 26..=49 → the bottom row shows "line 49".
+        assert_eq!(TerminalState::grid_row_text(&grid, 23), "line 49");
+        assert_eq!(state.display_offset(), 10, "user offset restored");
     }
 }

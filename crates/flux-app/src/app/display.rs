@@ -8,7 +8,7 @@ use super::{App, PopupState};
 impl App {
     /// Render the terminal grid.
     pub(super) fn update_display(&mut self) {
-        let Some(terminal) = &self.terminal else {
+        let Some(terminal) = &mut self.terminal else {
             return;
         };
         let Some(renderer) = &mut self.renderer else {
