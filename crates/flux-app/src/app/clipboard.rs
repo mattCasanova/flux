@@ -9,39 +9,6 @@ use arboard::Clipboard;
 use super::App;
 
 impl App {
-    /// Detect the system paste chord — Cmd+V on macOS, Ctrl+Shift+V elsewhere.
-    pub(super) fn is_paste_shortcut(&self, event: &winit::event::KeyEvent) -> bool {
-        use winit::keyboard::{Key, NamedKey};
-        let is_v = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v"))
-            || matches!(&event.logical_key, Key::Named(NamedKey::Paste));
-        if !is_v {
-            return false;
-        }
-        let m = self.modifiers;
-        if cfg!(target_os = "macos") {
-            m.super_key() && !m.control_key() && !m.alt_key()
-        } else {
-            m.control_key() && m.shift_key() && !m.alt_key() && !m.super_key()
-        }
-    }
-
-    /// Detect the system copy chord — Cmd+C on macOS, Ctrl+Shift+C elsewhere.
-    /// Plain Ctrl+C stays SIGINT territory on every platform.
-    pub(super) fn is_copy_shortcut(&self, event: &winit::event::KeyEvent) -> bool {
-        use winit::keyboard::{Key, NamedKey};
-        let is_c = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("c"))
-            || matches!(&event.logical_key, Key::Named(NamedKey::Copy));
-        if !is_c {
-            return false;
-        }
-        let m = self.modifiers;
-        if cfg!(target_os = "macos") {
-            m.super_key() && !m.control_key() && !m.alt_key()
-        } else {
-            m.control_key() && m.shift_key() && !m.alt_key() && !m.super_key()
-        }
-    }
-
     /// Copy the active selection to the system clipboard. Returns true
     /// if a selection consumed the chord; false lets the caller fall
     /// through to whatever the key would otherwise do. The text comes

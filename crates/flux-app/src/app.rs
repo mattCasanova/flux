@@ -31,6 +31,7 @@ use flux_input::{Autocomplete, InputEditor};
 use flux_terminal::state::TerminalState;
 
 use crate::config::FluxConfig;
+use crate::keys::Keymap;
 use crate::mux::{MuxState, Pane};
 
 pub(crate) use popup::PopupState;
@@ -41,6 +42,8 @@ pub(crate) const MIN_INPUT_BAR_ROWS: usize = 2;
 /// Application state — owns the window, renderer, PTY, and terminal state.
 pub struct App {
     pub(crate) config: FluxConfig,
+    /// Chord → action bindings: platform defaults + `[keys]`.
+    pub(crate) keymap: Keymap,
     pub(crate) proxy: winit::event_loop::EventLoopProxy<()>,
     pub(crate) window: Option<Arc<Window>>,
     pub(crate) renderer: Option<flux_renderer::Renderer>,
@@ -99,7 +102,9 @@ impl App {
         proxy: winit::event_loop::EventLoopProxy<()>,
         input: InputEditor,
     ) -> Self {
+        let keymap = Keymap::defaults().with_overrides(&config.keys);
         Self {
+            keymap,
             config,
             proxy,
             window: None,

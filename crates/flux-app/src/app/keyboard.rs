@@ -3,16 +3,21 @@
 //! `handle_keyboard` is the top-level entry point. Order of operations:
 //!
 //! 1. Drop key releases (only Pressed events do anything).
-//! 2. **Popup intercept** — if autocomplete (or future search) is
-//!    active, give it first refusal on the key.
-//! 3. Clipboard shortcut short-circuit — paste must work in both
-//!    raw and cooked mode, so it runs before the mode split.
-//! 4. Branch to `handle_keyboard_raw` (PTY-first) or
-//!    `handle_keyboard_cooked` (editor-first) based on `raw_mode`.
+//! 2. **Global actions** from the keymap (tabs, find) — they must work
+//!    while a popup or vim owns the keyboard.
+//! 3. **Popup intercept** — autocomplete / search bar get the key.
+//! 4. Remaining keymap actions (clipboard everywhere; scroll / undo /
+//!    block hops only when the editor owns the keyboard).
+//! 5. Branch to `handle_keyboard_raw` (PTY-first) or
+//!    `handle_keyboard_cooked` (editor-first).
+//!
+//! Chords live in `crate::keys` (defaults + `[keys]` overrides); this
+//! file only decides *when* an action may fire and what it does.
 
 use flux_input::Autocomplete;
 
 use super::{App, PopupState};
+use crate::keys::Action;
 
 impl App {
     pub(super) fn handle_keyboard(&mut self, event: winit::event::KeyEvent) {
@@ -22,19 +27,12 @@ impl App {
             return;
         }
 
-        // Tab shortcuts run in every mode — vim in one tab must not
-        // stop Cmd+T/W or tab switching (iTerm behavior).
-        if self.handle_tab_shortcut(&event) {
-            return;
-        }
+        let action = self.keymap.action_for(&event.logical_key, self.modifiers);
 
-        // Cmd+F toggles the search bar in every mode.
-        if self.is_find_shortcut(&event) {
-            if matches!(self.popup, PopupState::Search) {
-                self.close_search();
-            } else {
-                self.open_search();
-            }
+        if let Some(action) = action
+            && action.is_global()
+            && self.run_action(action)
+        {
             return;
         }
 
@@ -53,21 +51,58 @@ impl App {
             }
         }
 
-        if self.is_paste_shortcut(&event) {
-            self.handle_paste();
+        let pty_owns = self.pty_owns_keyboard();
+        if let Some(action) = action
+            && (!pty_owns || action.allowed_in_raw())
+            && self.run_action(action)
+        {
             return;
         }
 
-        if self.is_copy_shortcut(&event) && self.handle_copy() {
-            return;
-        }
-
-        if self.pty_owns_keyboard() {
+        if pty_owns {
             self.handle_keyboard_raw(event);
             return;
         }
 
         self.handle_keyboard_cooked(event);
+    }
+
+    /// Perform a keymap action. Returns false when the action declined
+    /// the key (Copy with nothing selected) so it falls through.
+    fn run_action(&mut self, action: Action) -> bool {
+        match action {
+            Action::NewTab => self.new_tab(),
+            Action::CloseTab => self.close_current_tab(),
+            Action::NextTab => self.cycle_tab(1),
+            Action::PrevTab => self.cycle_tab(-1),
+            Action::Tab(n) => self.select_tab(n as usize - 1),
+            Action::Find => {
+                if matches!(self.popup, PopupState::Search) {
+                    self.close_search();
+                } else {
+                    self.open_search();
+                }
+            }
+            Action::Copy => return self.handle_copy(),
+            Action::Paste => self.handle_paste(),
+            Action::Undo | Action::Redo => {
+                if action == Action::Undo {
+                    self.input.undo();
+                } else {
+                    self.input.redo();
+                }
+                self.maybe_update_autocomplete();
+                self.update_input_display();
+                self.request_redraw();
+            }
+            Action::ScrollLineUp => self.scroll_terminal(1),
+            Action::ScrollLineDown => self.scroll_terminal(-1),
+            Action::ScrollPageUp => self.scroll_page(true),
+            Action::ScrollPageDown => self.scroll_page(false),
+            Action::PrevBlock => self.jump_block(-1),
+            Action::NextBlock => self.jump_block(1),
+        }
+        true
     }
 
     /// True when keystrokes belong to the PTY rather than the Flux
@@ -78,42 +113,6 @@ impl App {
     /// at all — the Flux editor owns the keyboard.
     fn pty_owns_keyboard(&self) -> bool {
         self.raw_mode || self.terminal().map(|t| t.is_executing()).unwrap_or(false)
-    }
-
-    /// Cmd+T / Cmd+W / Cmd+1-9 / Cmd+[ / Cmd+] — returns true when the
-    /// key was a tab shortcut and was consumed.
-    fn handle_tab_shortcut(&mut self, event: &winit::event::KeyEvent) -> bool {
-        use winit::keyboard::Key;
-        if !self.modifiers.super_key() {
-            return false;
-        }
-        let Key::Character(text) = &event.logical_key else {
-            return false;
-        };
-        match text.as_str() {
-            "t" => {
-                self.new_tab();
-                true
-            }
-            "w" => {
-                self.close_current_tab();
-                true
-            }
-            "[" => {
-                self.cycle_tab(-1);
-                true
-            }
-            "]" => {
-                self.cycle_tab(1);
-                true
-            }
-            digit @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
-                let index = digit.as_bytes()[0] as usize - b'1' as usize;
-                self.select_tab(index);
-                true
-            }
-            _ => false,
-        }
     }
 
     /// Handle a key while the autocomplete popup is active. Returns
@@ -181,30 +180,6 @@ impl App {
         use winit::keyboard::{Key, NamedKey};
         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
-        // Cmd+Z / Cmd+Shift+Z (Ctrl+Z / Ctrl+Shift+Z elsewhere) —
-        // editor undo/redo (F17).
-        if let Key::Character(c) = &event.logical_key
-            && c.eq_ignore_ascii_case("z")
-        {
-            let m = self.modifiers;
-            let chord = if cfg!(target_os = "macos") {
-                m.super_key() && !m.control_key() && !m.alt_key()
-            } else {
-                m.control_key() && !m.alt_key() && !m.super_key()
-            };
-            if chord {
-                if m.shift_key() {
-                    self.input.redo();
-                } else {
-                    self.input.undo();
-                }
-                self.maybe_update_autocomplete();
-                self.update_input_display();
-                self.request_redraw();
-                return;
-            }
-        }
-
         match &event.logical_key {
             // Shift+Enter inserts a newline; Enter submits the buffer.
             Key::Named(NamedKey::Enter) => {
@@ -251,14 +226,6 @@ impl App {
                 self.open_autocomplete();
                 return;
             }
-            Key::Named(NamedKey::PageUp) => {
-                self.scroll_page(true);
-                return;
-            }
-            Key::Named(NamedKey::PageDown) => {
-                self.scroll_page(false);
-                return;
-            }
             Key::Named(NamedKey::Backspace) => {
                 self.input.backspace();
                 self.update_input_display();
@@ -298,16 +265,8 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::ArrowUp) => {
-                // Cmd+Shift+Up jumps to the previous block; Cmd+Up
-                // scrolls a line; plain Up is editor/history.
-                if self.modifiers.super_key() {
-                    if self.modifiers.shift_key() {
-                        self.jump_block(-1);
-                    } else {
-                        self.scroll_terminal(1);
-                    }
-                    return;
-                }
+                // Cmd+Up / Cmd+Shift+Up are keymap actions (scroll,
+                // block hop); plain Up is editor/history.
                 let on_first_line = self.input.cursor_line() == 0;
                 if self.input.line_count() == 1 || on_first_line {
                     self.input.history_prev();
@@ -319,14 +278,6 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::ArrowDown) => {
-                if self.modifiers.super_key() {
-                    if self.modifiers.shift_key() {
-                        self.jump_block(1);
-                    } else {
-                        self.scroll_terminal(-1);
-                    }
-                    return;
-                }
                 let on_last_line = self.input.cursor_line() == self.input.line_count() - 1;
                 if self.input.line_count() == 1 || on_last_line {
                     self.input.history_next();

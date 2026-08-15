@@ -107,3 +107,27 @@ lines = 10000
 # header, and marks failures in red with the exit code. Set to false
 # for the classic stream with the shell prompt visible.
 enabled = true
+
+[keys]
+# Keyboard shortcuts. Each line rebinds one action; leave a line out to
+# keep its default, set it to "" to unbind it. Modifiers: cmd (also
+# super), ctrl, alt (also opt), shift. Keys: a single character, or up,
+# down, left, right, enter, tab, escape, backspace, delete, home, end,
+# pageup, pagedown, space, f1-f12. Modifiers must match exactly.
+# Defaults shown (macOS):
+# new_tab          = "cmd+t"
+# close_tab        = "cmd+w"
+# next_tab         = "cmd+]"
+# prev_tab         = "cmd+["
+# tab_1            = "cmd+1"      # … through tab_9
+# find             = "cmd+f"
+# copy             = "cmd+c"      # copies when text is selected
+# paste            = "cmd+v"
+# undo             = "cmd+z"
+# redo             = "cmd+shift+z"
+# scroll_line_up   = "cmd+up"
+# scroll_line_down = "cmd+down"
+# scroll_page_up   = "pageup"
+# scroll_page_down = "pagedown"
+# prev_block       = "cmd+shift+up"
+# next_block       = "cmd+shift+down"

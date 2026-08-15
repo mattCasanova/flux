@@ -112,19 +112,4 @@ impl App {
         self.update_display();
         self.request_redraw();
     }
-
-    /// Cmd+F (macOS) / Ctrl+Shift+F.
-    pub(super) fn is_find_shortcut(&self, event: &winit::event::KeyEvent) -> bool {
-        use winit::keyboard::Key;
-        let is_f = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("f"));
-        if !is_f {
-            return false;
-        }
-        let m = self.modifiers;
-        if cfg!(target_os = "macos") {
-            m.super_key() && !m.control_key() && !m.alt_key()
-        } else {
-            m.control_key() && m.shift_key() && !m.alt_key() && !m.super_key()
-        }
-    }
 }

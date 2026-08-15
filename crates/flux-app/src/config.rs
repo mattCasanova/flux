@@ -52,6 +52,10 @@ pub struct FluxConfig {
     /// the same reason as `scrollback`.
     #[serde(default)]
     pub blocks: BlocksConfig,
+    /// `[keys]` — action name → chord string overrides (F15). See
+    /// `keys.rs` for names and syntax; unset actions keep defaults.
+    #[serde(default)]
+    pub keys: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

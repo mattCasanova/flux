@@ -4,6 +4,7 @@
 
 mod app;
 mod config;
+mod keys;
 mod logging;
 mod mux;
 mod platform;
