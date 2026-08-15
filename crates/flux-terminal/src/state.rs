@@ -1421,7 +1421,9 @@ mod tests {
         state.process_bytes(B);
         state.process_bytes(b"clear\r\n");
         state.process_bytes(C);
-        state.process_bytes(b"\x1b[H\x1b[2J");
+        // The exact bytes macOS `clear` emits: wipe history, home,
+        // clear screen (which scrolls the visible rows INTO history).
+        state.process_bytes(b"\x1b[3J\x1b[H\x1b[2J");
         state.process_bytes(&d(0));
         state.process_bytes(A);
         state.process_bytes(b"~ >");
@@ -1475,7 +1477,7 @@ mod tests {
         for i in 0..10 {
             state.process_bytes(format!("run1 {i}\r\n").as_bytes());
         }
-        state.process_bytes(b"\x1b[H\x1b[2J");
+        state.process_bytes(b"\x1b[3J\x1b[H\x1b[2J");
         state.process_bytes(b"run2 0\r\nrun2 1\r\n");
         state.process_bytes(&d(0));
         state.process_bytes(A);
