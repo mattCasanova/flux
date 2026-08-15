@@ -36,7 +36,11 @@ fn main() -> Result<()> {
     let history = CommandHistory::load(history_path, 10_000, shell_history);
     let input = InputEditor::with_history(history);
 
-    println!("Flux v0.1.0 — 1.21 gigawatts");
+    println!(
+        "Flux v{} ({}) — 1.21 gigawatts",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FLUX_GIT_SHA").unwrap_or("no-git")
+    );
 
     let event_loop = EventLoop::new()?;
     let proxy = event_loop.create_proxy();
