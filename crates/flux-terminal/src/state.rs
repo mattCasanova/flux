@@ -509,7 +509,7 @@ impl TerminalState {
             let offset = user_offset + self.view_bump;
             self.decorate_spans(&mut grid, offset);
             if let Some(hidden) = plan.hidden {
-                self.blank_hidden_prompt(&mut grid, hidden, offset);
+                self.blank_hidden_prompt(&mut grid, hidden, offset, user_offset == 0);
             }
         }
 
@@ -644,7 +644,13 @@ impl TerminalState {
 
     /// Blank the live prompt rows still inside the viewport and move the
     /// bottom-anchor row to the last row above them.
-    fn blank_hidden_prompt(&self, grid: &mut TerminalGrid, hidden: (i64, i64), offset: usize) {
+    fn blank_hidden_prompt(
+        &self,
+        grid: &mut TerminalGrid,
+        hidden: (i64, i64),
+        offset: usize,
+        at_tail: bool,
+    ) {
         let blank = CellData {
             character: ' ',
             fg: self.theme.foreground,
@@ -659,12 +665,18 @@ impl TerminalState {
                 grid.set(row as usize, col, blank);
             }
         }
-        // Anchor: the row above the prompt when it's in view; when the
-        // prompt sits below the viewport (bump pulled it off) the whole
-        // viewport is content and the renderer's default anchor
-        // (bottom row) is right; when it's at the very top there is no
-        // content to anchor.
-        grid.cursor = if first_row >= self.rows as i64 {
+        // Anchor: bottom-hugging content against the input bar is a
+        // TAIL-ONLY presentation. The moment the user scrolls, the view
+        // must be a plain window over the buffer — old content enters
+        // at the top edge and slides down per notch, like every
+        // terminal. Keeping the anchor while scrolled pinned content to
+        // the bottom edge instead, which read as "a cover being lifted"
+        // (dogfood, 2026-08-15). At the tail: the row above the prompt
+        // when it's in view; when the prompt sits below the viewport
+        // (bump pulled it off) the whole viewport is content and the
+        // renderer's default anchor (bottom row) is right; at the very
+        // top there is no content to anchor.
+        grid.cursor = if !at_tail || first_row >= self.rows as i64 {
             None
         } else if first_row > 0 {
             Some((0, first_row as usize - 1))
@@ -1440,13 +1452,21 @@ mod tests {
             assert_eq!(TerminalState::grid_row_text(&grid, row), "", "row {row}");
         }
 
-        // Scroll up one line: the row above the clear block is the last
-        // pre-clear line — no blank screen to wade through.
+        // Scroll up: scrolled mode is a plain window — old content
+        // enters at the TOP edge and slides DOWN one row per notch
+        // (no bottom anchor; anchored scrolling read as "a cover being
+        // lifted"). The clear block rides down with it.
         state.scroll_lines(1);
         let grid = state.grid_snapshot();
         assert_eq!(TerminalState::grid_row_text(&grid, 0), "line 39");
         assert_eq!(TerminalState::grid_row_text(&grid, 1), "~ >clear");
-        assert_eq!(grid.cursor, Some((0, 1)));
+        assert_eq!(grid.cursor, None, "no anchor while scrolled");
+        state.scroll_lines(1);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "line 38");
+        assert_eq!(TerminalState::grid_row_text(&grid, 1), "line 39");
+        assert_eq!(TerminalState::grid_row_text(&grid, 2), "~ >clear");
+        assert_eq!(grid.cursor, None);
         state.scroll_to_bottom();
 
         // The next command stacks under the clear block.
