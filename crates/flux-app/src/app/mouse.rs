@@ -161,6 +161,16 @@ impl App {
             return;
         }
 
+        // Tab bar clicks switch tabs — checked first, in every mode
+        // (the bar sits outside the grid, so nothing below cares).
+        if matches!(state, ElementState::Pressed) {
+            let pos = self.mouse.last_cursor_pos;
+            if let Some(index) = self.tab_at_pixel(pos.x, pos.y) {
+                self.select_tab(index);
+                return;
+            }
+        }
+
         // When the program requested mouse reporting (vim `mouse=a`,
         // htop, Claude Code), clicks belong to it — encode and forward.
         // Shift is the xterm-standard bypass: Shift+drag always makes a
