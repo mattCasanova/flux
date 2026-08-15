@@ -69,6 +69,8 @@ pub struct App {
     pub(crate) autocomplete: Autocomplete,
     /// Find-in-scrollback bar state (F14).
     pub(crate) search: search::SearchBar,
+    /// Armed close confirmation: (what, id) and when (#58).
+    pub(crate) close_confirm: Option<((&'static str, u64), std::time::Instant)>,
     /// Tracks the input bar's line count so we only recompute layout
     /// when it changes (avoids unnecessary PTY resizes).
     pub(crate) last_input_lines: usize,
@@ -117,6 +119,7 @@ impl App {
             popup: PopupState::Hidden,
             autocomplete: Autocomplete::default(),
             search: search::SearchBar::default(),
+            close_confirm: None,
             last_input_lines: 1,
             scroll_accum: 0.0,
             shell_exited: false,

@@ -72,6 +72,8 @@ pub struct Renderer {
     pub(crate) pane_scrollbars: std::collections::HashMap<u64, Vec<CellInstance>>,
     /// Split dividers + focused-pane accent, rebuilt by `set_pane_frames`.
     pub(crate) frame_instances: Vec<CellInstance>,
+    /// Transient one-line notice (top-center), e.g. close confirmation.
+    pub(crate) notice_instances: Vec<CellInstance>,
     /// Instances for the fixed input chrome — rebuilt on `set_input_line`.
     pub(crate) input_instances: Vec<CellInstance>,
     /// Instances for popup overlays (F7 autocomplete, F14 search
@@ -169,6 +171,7 @@ impl Renderer {
             pane_y_shift: std::collections::HashMap::new(),
             pane_scrollbars: std::collections::HashMap::new(),
             frame_instances: Vec::new(),
+            notice_instances: Vec::new(),
             input_instances: Vec::with_capacity(64),
             popup_instances: Vec::new(),
             selection_instances: Vec::new(),

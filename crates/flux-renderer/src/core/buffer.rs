@@ -59,6 +59,7 @@ impl Renderer {
         slices.push(&self.input_instances);
         slices.push(&self.tab_instances);
         slices.push(&self.popup_instances);
+        slices.push(&self.notice_instances);
 
         let total: usize = slices.iter().map(|s| s.len()).sum();
         if total == 0 {

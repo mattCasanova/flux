@@ -10,6 +10,9 @@ use flux_terminal::state::TerminalState;
 use super::App;
 use crate::mux::SplitAxis;
 
+/// How long a "press again to close" confirmation stays armed.
+const CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
 impl App {
     /// Open a new tab with a fresh shell and focus it.
     pub(super) fn new_tab(&mut self) {
@@ -35,9 +38,20 @@ impl App {
     }
 
     /// Close the focused tab; the app exits when the last one goes.
-    /// (Confirm-close with running processes is #58.)
+    /// If any pane in the tab has a command running, the first press
+    /// only warns (title flashes "press again to close"); a second
+    /// press within `CONFIRM_WINDOW` closes (#58).
     pub(super) fn close_current_tab(&mut self) {
         let index = self.mux.current_tab;
+        let busy = self
+            .mux
+            .focused_tab()
+            .map(|tab| tab.root.panes().iter().any(|p| p.terminal.is_executing()))
+            .unwrap_or(false);
+        if busy && !self.take_close_confirmation(("tab", index as u64)) {
+            self.arm_close_confirmation(("tab", index as u64), "tab has a running command");
+            return;
+        }
         if self.mux.close_tab(index) {
             self.shell_exited = true;
             self.request_redraw();
@@ -99,8 +113,21 @@ impl App {
     }
 
     /// Close the focused pane; closing a tab's last pane closes the tab.
+    /// Same two-press confirmation as tabs when a command is running.
     pub(super) fn close_focused_pane(&mut self) {
         let focused = self.mux.focused_pane().map(|p| p.id);
+        let busy = self
+            .mux
+            .focused_pane()
+            .map(|p| p.terminal.is_executing())
+            .unwrap_or(false);
+        if let Some(id) = focused
+            && busy
+            && !self.take_close_confirmation(("pane", id))
+        {
+            self.arm_close_confirmation(("pane", id), "pane has a running command");
+            return;
+        }
         if self.mux.close_focused_pane() {
             self.close_current_tab();
             return;
@@ -144,6 +171,29 @@ impl App {
         if self.mux.cycle_tab(step) {
             self.after_tab_switch();
         }
+    }
+
+    /// Arm a close confirmation for `target` and show a notice.
+    fn arm_close_confirmation(&mut self, target: (&'static str, u64), why: &str) {
+        self.close_confirm = Some((target, std::time::Instant::now()));
+        let text = format!("{why} — press again to close");
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_notice(&text);
+        }
+        self.request_redraw();
+    }
+
+    /// True (and disarms) if `target` was armed within the window.
+    fn take_close_confirmation(&mut self, target: (&'static str, u64)) -> bool {
+        let armed = matches!(
+            self.close_confirm,
+            Some((t, at)) if t == target && at.elapsed() <= CONFIRM_WINDOW
+        );
+        self.close_confirm = None;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.hide_notice();
+        }
+        armed
     }
 
     /// Everything that must happen when the focused tab changes (or

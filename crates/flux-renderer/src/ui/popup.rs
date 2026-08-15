@@ -173,6 +173,50 @@ impl Renderer {
         self.rebuild_combined_buffer();
     }
 
+    /// Show a one-line notice centered near the top of the content area
+    /// (close confirmations and the like). Own instance list, so it can
+    /// coexist with the search bar / autocomplete.
+    pub fn set_notice(&mut self, text: &str) {
+        let cell_w = self.atlas.cell_width;
+        let cell_h = self.atlas.cell_height;
+        let baseline = self.atlas.baseline_offset;
+        let style = self.default_style;
+        let window_w = self.gpu.surface_config.width as f32;
+        let top_y = self.content_top + self.padding_y * 0.5;
+
+        let mut instances = std::mem::take(&mut self.notice_instances);
+        instances.clear();
+
+        let text = format!(" {text} ");
+        let width = text.chars().count() as f32 * cell_w;
+        let left_x = ((window_w - width) * 0.5).max(0.0);
+        let bg = Color::from_hex("#3b2f2f").unwrap_or_default();
+        let fg = Color::from_hex("#f7768e").unwrap_or_default();
+        instances.push(CellInstance {
+            position: [left_x, top_y],
+            size: [width, cell_h],
+            glyph_uv: [0.0, 0.0, 0.0, 0.0],
+            fg_color: [bg.r, bg.g, bg.b, bg.a],
+            bg_color: [bg.r, bg.g, bg.b, bg.a],
+        });
+        for (i, ch) in text.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            let x = left_x + i as f32 * cell_w;
+            self.render_glyph(ch, style, x, top_y, baseline, fg, bg, &mut instances);
+        }
+        self.notice_instances = instances;
+        self.rebuild_combined_buffer();
+    }
+
+    pub fn hide_notice(&mut self) {
+        if !self.notice_instances.is_empty() {
+            self.notice_instances.clear();
+            self.rebuild_combined_buffer();
+        }
+    }
+
     /// Hide the autocomplete popup.
     pub fn hide_autocomplete_popup(&mut self) {
         if !self.popup_instances.is_empty() {
