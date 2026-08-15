@@ -278,6 +278,7 @@ impl Renderer {
         }
 
         self.output_instances = instances;
+        self.set_scrollbar(grid);
         self.rebuild_combined_buffer();
     }
 }

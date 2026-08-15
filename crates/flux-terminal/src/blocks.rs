@@ -64,6 +64,8 @@ pub(crate) enum StreamEvent {
     OutputStart,
     /// OSC 133;D[;code] — command finished.
     CommandEnd(Option<i32>),
+    /// `CSI 2 J` — whole screen cleared (`clear`, zle's clear-screen).
+    ScreenCleared,
     /// `CSI 3 J` — scrollback history wiped (macOS `clear` sends it).
     HistoryCleared,
     /// RIS (`ESC c`) — full terminal reset, screen and history gone.
@@ -192,8 +194,10 @@ impl Perform for BlockCapture {
         }
     }
 
-    /// `CSI 3 J` wipes scrollback — the row tracker must know, because
-    /// every absolute row it holds is relative to history length.
+    /// `CSI 2 J` clears the screen (content goes to history) and
+    /// `CSI 3 J` wipes scrollback — the row tracker must know both:
+    /// every absolute row it holds is relative to history length, and
+    /// the view decides what to show after a clear.
     fn csi_dispatch(
         &mut self,
         params: &alacritty_terminal::vte::Params,
@@ -205,8 +209,10 @@ impl Perform for BlockCapture {
             return;
         }
         let first = params.iter().next().and_then(|p| p.first().copied());
-        if first == Some(3) {
-            self.events.push(StreamEvent::HistoryCleared);
+        match first {
+            Some(2) => self.events.push(StreamEvent::ScreenCleared),
+            Some(3) => self.events.push(StreamEvent::HistoryCleared),
+            _ => {}
         }
     }
 

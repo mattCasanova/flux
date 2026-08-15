@@ -77,6 +77,9 @@ pub struct Renderer {
     /// (F12). Drawn after output so the tint composites over the grid,
     /// before input/popup so chrome stays readable.
     pub(crate) selection_instances: Vec<CellInstance>,
+    /// Scrollbar track + thumb while the viewport is scrolled into
+    /// history — rebuilt on `set_grid`, drawn over the selection tint.
+    pub(crate) scrollbar_instances: Vec<CellInstance>,
     /// Bottom-anchor shift of the last `set_grid`, in rows. Cached so
     /// selection rendering and the app's pixel→cell mapping agree with
     /// what's actually on screen.
@@ -159,6 +162,7 @@ impl Renderer {
             input_instances: Vec::with_capacity(64),
             popup_instances: Vec::new(),
             selection_instances: Vec::new(),
+            scrollbar_instances: Vec::new(),
             current_y_shift_rows: 0,
             alt_bg_policy: AltBgPolicy::Sync,
             scrolled_bg: None,

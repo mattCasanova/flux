@@ -31,7 +31,7 @@ impl Renderer {
     /// Rebuild the combined instance buffer from the persistent
     /// output / selection / input / popup vecs.
     ///
-    /// Paint order: **output → selection → input → popup**. This is
+    /// Paint order: **output → selection → scrollbar → input → popup**. This is
     /// the draw order inside a single `draw(0..4, 0..instance_count)`
     /// call, which means later slices render on top of earlier ones.
     /// The selection tint composites over the grid but under the
@@ -44,6 +44,7 @@ impl Renderer {
         let slices = [
             &self.output_instances,
             &self.selection_instances,
+            &self.scrollbar_instances,
             &self.input_instances,
             &self.popup_instances,
         ];
@@ -64,6 +65,7 @@ impl Renderer {
         for slice in [
             &self.output_instances,
             &self.selection_instances,
+            &self.scrollbar_instances,
             &self.input_instances,
             &self.popup_instances,
         ] {

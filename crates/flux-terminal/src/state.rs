@@ -123,14 +123,21 @@ impl Dimensions for TermDimensions {
     }
 }
 
-/// The live prompt's rows (grid coordinates) and the display-offset
-/// bump that pulls them off the bottom of the viewport.
+/// What the snapshot should do to the viewport: which live-prompt rows
+/// (grid coordinates, inclusive) to hide, and how far to bump the
+/// display offset to fill blank rows at the top with recent history.
 #[derive(Debug, Clone, Copy)]
-struct HiddenPrompt {
-    start_line: i64,
-    end_line: i64,
+struct ViewPlan {
+    hidden: Option<(i64, i64)>,
     bump: usize,
 }
+
+/// After a screen clear issued by a command that had printed at most
+/// this many rows of output, the command's block stays in view (Warp
+/// keeps the `clear` block). More output than this and the clear
+/// starts a fresh view — a `cargo watch -c` loop should not drag its
+/// previous run back in.
+const CLEAR_KEEP_OUTPUT_ROWS: AbsRow = 2;
 
 /// End (exclusive) of the side-parser run starting at `start`. A run
 /// ends right *after* a byte that can terminate an OSC (`BEL`, `\\`,
@@ -178,9 +185,15 @@ pub struct TerminalState {
     /// Primary-grid history size after the last settle — the value to
     /// trust while the alt screen is active (its grid has no history).
     last_history: usize,
-    /// Extra display offset the last snapshot applied to pull the hidden
-    /// live prompt off the bottom of the viewport. Mouse mapping adds it.
-    hidden_bump: usize,
+    /// Extra display offset the last snapshot applied (hidden prompt
+    /// pulled off the bottom, blank top rows filled from history).
+    /// Mouse mapping adds it.
+    view_bump: usize,
+    /// Oldest absolute row the snapshot may pull into view to fill
+    /// blank rows. Advances on screen clears so a cleared screen stays
+    /// cleared (except for the block that cleared it — see
+    /// `CLEAR_KEEP_OUTPUT_ROWS`), history wipes, and resets.
+    view_floor: AbsRow,
     /// Master switch for the semantic stream (prompt hiding + span
     /// decoration). Off = classic stream.
     blocks_enabled: bool,
@@ -215,7 +228,8 @@ impl TerminalState {
             tracker: SpanTracker::new(),
             scrollback_cap: scrollback_lines,
             last_history: 0,
-            hidden_bump: 0,
+            view_bump: 0,
+            view_floor: 0,
             blocks_enabled: true,
             event_rx: rx,
             cols,
@@ -295,20 +309,43 @@ impl TerminalState {
         }
     }
 
+    /// Absolute row of the top screen line right now.
+    fn screen_top(&self) -> AbsRow {
+        self.tracker.abs(self.term.grid().history_size(), 0)
+    }
+
     /// Record marker rows / apply history wipes for events the side
     /// parser just fired, with the main parser caught up to them.
     fn apply_stream_events(&mut self, events: &[StreamEvent], history_before: usize) {
         for &event in events {
             match event {
+                StreamEvent::ScreenCleared => {
+                    if self.is_alt_screen() {
+                        continue;
+                    }
+                    let screen_top = self.screen_top();
+                    // Keep the clearing command's block in view when it
+                    // is a `clear`-like command (header + a couple of
+                    // rows at most); otherwise the view restarts here.
+                    let keep_from = self.tracker.spans().last().and_then(|span| {
+                        let executing = span.output_start.is_some() && !span.is_closed();
+                        let output_rows = screen_top - span.header_end();
+                        (executing && output_rows <= CLEAR_KEEP_OUTPUT_ROWS)
+                            .then_some(span.prompt_start)
+                    });
+                    self.view_floor = keep_from.unwrap_or(screen_top);
+                }
                 StreamEvent::HistoryCleared => {
                     if !self.is_alt_screen() {
                         self.tracker.history_cleared(history_before);
+                        self.view_floor = self.screen_top();
                     }
                 }
                 StreamEvent::Reset => {
                     // RIS also leaves the alt screen, so by now the
                     // primary grid is active (and empty).
                     self.tracker.reset(history_before);
+                    self.view_floor = self.screen_top();
                 }
                 marker => {
                     // Markers only mean something on the primary grid.
@@ -324,7 +361,9 @@ impl TerminalState {
                         StreamEvent::PromptEnd => self.tracker.prompt_end(row, cursor.column.0),
                         StreamEvent::OutputStart => self.tracker.output_start(row),
                         StreamEvent::CommandEnd(code) => self.tracker.command_end(row, code),
-                        StreamEvent::HistoryCleared | StreamEvent::Reset => unreachable!(),
+                        StreamEvent::ScreenCleared
+                        | StreamEvent::HistoryCleared
+                        | StreamEvent::Reset => unreachable!(),
                     }
                 }
             }
@@ -396,7 +435,7 @@ impl TerminalState {
     /// (display offset + the hidden-prompt bump the last snapshot
     /// applied, so clicks land on what was actually painted).
     fn viewport_to_point(&self, col: usize, row: usize) -> Point {
-        let offset = self.display_offset() + self.hidden_bump;
+        let offset = self.display_offset() + self.view_bump;
         let line = Line(row as i32 - offset as i32);
         Point::new(line, Column(col.min(self.cols.saturating_sub(1))))
     }
@@ -456,28 +495,27 @@ impl TerminalState {
     /// `viewport_to_point`.
     pub fn grid_snapshot(&mut self) -> TerminalGrid {
         let user_offset = self.display_offset();
-        let hidden = self.hidden_prompt();
-        let bump = hidden.map(|h| h.bump).unwrap_or(0);
-        self.hidden_bump = 0;
-        if bump > 0 {
-            self.term.scroll_display(Scroll::Delta(bump as i32));
-            self.hidden_bump = self.display_offset() - user_offset;
+        let plan = self.plan_view();
+        self.view_bump = 0;
+        if plan.bump > 0 {
+            self.term.scroll_display(Scroll::Delta(plan.bump as i32));
+            self.view_bump = self.display_offset() - user_offset;
         }
 
         let mut grid = self.snapshot_viewport();
         grid.display_offset = user_offset;
 
         if self.blocks_enabled && !self.is_alt_screen() {
-            let offset = user_offset + self.hidden_bump;
+            let offset = user_offset + self.view_bump;
             self.decorate_spans(&mut grid, offset);
-            if let Some(hidden) = hidden {
+            if let Some(hidden) = plan.hidden {
                 self.blank_hidden_prompt(&mut grid, hidden, offset);
             }
         }
 
-        if self.hidden_bump > 0 {
+        if self.view_bump > 0 {
             self.term
-                .scroll_display(Scroll::Delta(-(self.hidden_bump as i32)));
+                .scroll_display(Scroll::Delta(-(self.view_bump as i32)));
         }
         grid
     }
@@ -494,6 +532,7 @@ impl TerminalState {
         // renders a scrolled view as blank — regression-tested below.
         let display_offset = content.display_offset as i32;
         grid.display_offset = content.display_offset;
+        grid.history_size = self.term.grid().history_size();
 
         // Set cursor position (scrolled up, the cursor converts to a row
         // at/below the viewport bottom and is culled by the bounds check).
@@ -566,49 +605,55 @@ impl TerminalState {
         grid
     }
 
-    /// The live prompt's rows in grid coordinates, if it should be
-    /// hidden right now, plus how far to bump the display offset so
-    /// those rows leave the bottom of the viewport.
-    fn hidden_prompt(&self) -> Option<HiddenPrompt> {
-        if !self.blocks_enabled || self.is_alt_screen() {
-            return None;
-        }
-        let (start, end) = self.tracker.live_prompt()?;
-        let history = self.term.grid().history_size();
-        let start_line = self.tracker.line(history, start);
-        let end_line = self.tracker.line(history, end);
-        // Pull the viewport up only when the prompt sits on the very
-        // bottom rows of a full screen — then the lines that come in
-        // at the top are the ones that just scrolled off, and the view
-        // stays continuous. Anywhere else (after `clear`, in a short
-        // session, or scrolled into history by background output) the
-        // prompt rows are simply blanked: bumping there would drag
-        // history back into view — macOS's `clear` sends no `\e[3J`,
-        // so the "cleared" screen lives on in history and a bump from
-        // row 0 showed it right back (dogfood, 2026-08-15).
-        let bump = if start_line >= 0 && end_line == self.rows as i64 - 1 {
-            self.rows - start_line as usize
-        } else {
-            0
+    /// Decide what the snapshot shows. With the semantic stream on:
+    /// the live prompt's rows are hidden, and blank rows that would sit
+    /// above the content (the renderer bottom-anchors on the last
+    /// content row) are filled with recent history — never older than
+    /// `view_floor`, so a cleared screen stays cleared and a full
+    /// screen stays continuous.
+    fn plan_view(&self) -> ViewPlan {
+        let none = ViewPlan {
+            hidden: None,
+            bump: 0,
         };
-        Some(HiddenPrompt {
-            start_line,
-            end_line,
-            bump,
-        })
+        if !self.blocks_enabled || self.is_alt_screen() {
+            return none;
+        }
+        let history = self.term.grid().history_size();
+        let rows = self.rows as i64;
+        let hidden = self.tracker.live_prompt().map(|(start, end)| {
+            (
+                self.tracker.line(history, start),
+                self.tracker.line(history, end),
+            )
+        });
+        // Last row holding content once the prompt is hidden — the row
+        // the renderer will anchor at the bottom.
+        let last_content_line = match hidden {
+            Some((start_line, _)) if (0..rows).contains(&start_line) => start_line - 1,
+            _ => self.term.grid().cursor.point.line.0 as i64,
+        };
+        let blank_top = (rows - 1 - last_content_line).clamp(0, rows);
+        let screen_top = self.tracker.abs(history, 0);
+        let max_pull = (screen_top - self.view_floor).clamp(0, history as i64);
+        ViewPlan {
+            hidden,
+            bump: blank_top.min(max_pull) as usize,
+        }
     }
 
     /// Blank the live prompt rows still inside the viewport and move the
     /// bottom-anchor row to the last row above them.
-    fn blank_hidden_prompt(&self, grid: &mut TerminalGrid, hidden: HiddenPrompt, offset: usize) {
+    fn blank_hidden_prompt(&self, grid: &mut TerminalGrid, hidden: (i64, i64), offset: usize) {
         let blank = CellData {
             character: ' ',
             fg: self.theme.foreground,
             bg: self.theme.background,
             flags: CellFlags::empty(),
         };
-        let first_row = hidden.start_line + offset as i64;
-        let last_row = hidden.end_line + offset as i64;
+        let (start_line, end_line) = hidden;
+        let first_row = start_line + offset as i64;
+        let last_row = end_line + offset as i64;
         for row in first_row.max(0)..=last_row.min(self.rows as i64 - 1) {
             for col in 0..self.cols {
                 grid.set(row as usize, col, blank);
@@ -846,6 +891,9 @@ impl TerminalState {
         self.term.resize(dims);
         if cols_changed {
             self.tracker.columns_changed();
+            // Row identity above the screen is gone; don't pull any of
+            // it into view until fresh output has scrolled past.
+            self.view_floor = self.screen_top();
         }
         // Shrinking rows pushes lines into history — count them.
         self.settle_history();
@@ -1357,6 +1405,87 @@ mod tests {
         for row in 4..24 {
             assert_eq!(TerminalState::grid_row_text(&grid, row), "");
         }
+    }
+
+    /// Warp keeps the block that ran `clear`; so do we. Older content
+    /// stays reachable by scrolling, with no blank screen in between.
+    #[test]
+    fn clear_keeps_its_own_block_and_scrolls_into_history_seamlessly() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..40 {
+            state.process_bytes(format!("line {i}\r\n").as_bytes());
+        }
+        // `clear` cycle: header, then the clear itself as output.
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        state.process_bytes(b"clear\r\n");
+        state.process_bytes(C);
+        state.process_bytes(b"\x1b[H\x1b[2J");
+        state.process_bytes(&d(0));
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+
+        let grid = state.grid_snapshot();
+        assert_eq!(
+            TerminalState::grid_row_text(&grid, 0),
+            "~ >clear",
+            "the clear block is pulled back into view"
+        );
+        assert_eq!(grid.cursor, Some((0, 0)), "…and anchors at the bottom");
+        for row in 1..24 {
+            assert_eq!(TerminalState::grid_row_text(&grid, row), "", "row {row}");
+        }
+
+        // Scroll up one line: the row above the clear block is the last
+        // pre-clear line — no blank screen to wade through.
+        state.scroll_lines(1);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "line 39");
+        assert_eq!(TerminalState::grid_row_text(&grid, 1), "~ >clear");
+        assert_eq!(grid.cursor, Some((0, 1)));
+        state.scroll_to_bottom();
+
+        // The next command stacks under the clear block.
+        state.process_bytes(b"ls\r\n");
+        state.process_bytes(C);
+        state.process_bytes(b"a\r\n");
+        state.process_bytes(&d(0));
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >clear");
+        assert_eq!(TerminalState::grid_row_text(&grid, 1), "~ >ls");
+        assert_eq!(TerminalState::grid_row_text(&grid, 2), "a");
+        assert_eq!(grid.cursor, Some((0, 2)));
+    }
+
+    /// A command that clears after real output (watch loops) starts the
+    /// view fresh at the clear instead of dragging the previous run in.
+    #[test]
+    fn chatty_command_that_clears_starts_a_fresh_view() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        state.process_bytes(b"loop\r\n");
+        state.process_bytes(C);
+        for i in 0..10 {
+            state.process_bytes(format!("run1 {i}\r\n").as_bytes());
+        }
+        state.process_bytes(b"\x1b[H\x1b[2J");
+        state.process_bytes(b"run2 0\r\nrun2 1\r\n");
+        state.process_bytes(&d(0));
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "run2 0");
+        assert_eq!(TerminalState::grid_row_text(&grid, 1), "run2 1");
+        assert_eq!(grid.cursor, Some((0, 1)));
+        assert_eq!(TerminalState::grid_row_text(&grid, 2), "");
     }
 
     #[test]

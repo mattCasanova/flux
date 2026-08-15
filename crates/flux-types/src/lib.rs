@@ -118,6 +118,9 @@ pub struct TerminalGrid {
     /// consumers (selection math in F12) can map screen rows back to
     /// absolute scrollback lines without another terminal round-trip.
     pub display_offset: usize,
+    /// Lines of scrollback history above the live screen — the extent
+    /// `display_offset` can reach. Drives the scrollbar.
+    pub history_size: usize,
 }
 
 impl TerminalGrid {
@@ -128,6 +131,7 @@ impl TerminalGrid {
             cols,
             rows,
             display_offset: 0,
+            history_size: 0,
         }
     }
 

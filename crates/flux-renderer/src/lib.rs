@@ -9,6 +9,7 @@ mod core;
 mod glyph;
 mod output;
 mod renderer;
+mod scrollbar;
 mod selection;
 mod ui;
 
