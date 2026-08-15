@@ -181,6 +181,30 @@ impl App {
         use winit::keyboard::{Key, NamedKey};
         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
+        // Cmd+Z / Cmd+Shift+Z (Ctrl+Z / Ctrl+Shift+Z elsewhere) —
+        // editor undo/redo (F17).
+        if let Key::Character(c) = &event.logical_key
+            && c.eq_ignore_ascii_case("z")
+        {
+            let m = self.modifiers;
+            let chord = if cfg!(target_os = "macos") {
+                m.super_key() && !m.control_key() && !m.alt_key()
+            } else {
+                m.control_key() && !m.alt_key() && !m.super_key()
+            };
+            if chord {
+                if m.shift_key() {
+                    self.input.redo();
+                } else {
+                    self.input.undo();
+                }
+                self.maybe_update_autocomplete();
+                self.update_input_display();
+                self.request_redraw();
+                return;
+            }
+        }
+
         match &event.logical_key {
             // Shift+Enter inserts a newline; Enter submits the buffer.
             Key::Named(NamedKey::Enter) => {

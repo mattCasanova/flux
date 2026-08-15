@@ -22,6 +22,47 @@ pub struct InputEditor {
     /// Saved draft when navigating into history. Restored when the user
     /// moves past the end of history.
     saved_buffer: Option<String>,
+    /// Undo/redo (F17): snapshots of `(buffer, cursor)` taken before
+    /// each edit group. See [`EditKind`] for how keystrokes coalesce.
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
+    last_edit: EditKind,
+}
+
+/// One undo step: the buffer and cursor as they were before an edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Snapshot {
+    buffer: String,
+    cursor: usize,
+}
+
+/// How an edit coalesces with the one before it. Typing a word (and
+/// its trailing spaces) is one undo step; a run of backspaces is one
+/// step; everything else — paste, autocomplete, clear, newline,
+/// history recall — is its own step. Cursor movement ends a group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum EditKind {
+    #[default]
+    None,
+    TypeWord,
+    TypeSpace,
+    Backspace,
+    DeleteForward,
+    Other,
+}
+
+impl EditKind {
+    /// Does an edit of `self` join the open group of kind `prev`?
+    fn coalesces_with(self, prev: EditKind) -> bool {
+        matches!(
+            (prev, self),
+            (EditKind::TypeWord, EditKind::TypeWord)
+                | (EditKind::TypeWord, EditKind::TypeSpace)
+                | (EditKind::TypeSpace, EditKind::TypeSpace)
+                | (EditKind::Backspace, EditKind::Backspace)
+                | (EditKind::DeleteForward, EditKind::DeleteForward)
+        )
+    }
 }
 
 impl InputEditor {
@@ -46,9 +87,56 @@ impl InputEditor {
         self.cursor
     }
 
+    /// Call before mutating the buffer: opens a new undo group unless
+    /// `kind` coalesces with the current one. Any edit clears redo.
+    fn record(&mut self, kind: EditKind) {
+        self.redo_stack.clear();
+        if !kind.coalesces_with(self.last_edit) {
+            self.undo_stack.push(Snapshot {
+                buffer: self.buffer.clone(),
+                cursor: self.cursor,
+            });
+        }
+        self.last_edit = kind;
+    }
+
+    /// Cursor movement ends the current edit group without recording.
+    fn break_group(&mut self) {
+        self.last_edit = EditKind::None;
+    }
+
+    /// Undo the last edit group. Returns false when there is nothing
+    /// to undo.
+    pub fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(Snapshot {
+            buffer: std::mem::replace(&mut self.buffer, snapshot.buffer),
+            cursor: std::mem::replace(&mut self.cursor, snapshot.cursor),
+        });
+        self.last_edit = EditKind::None;
+        true
+    }
+
+    /// Redo the last undone group. Returns false when there is nothing
+    /// to redo.
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(Snapshot {
+            buffer: std::mem::replace(&mut self.buffer, snapshot.buffer),
+            cursor: std::mem::replace(&mut self.cursor, snapshot.cursor),
+        });
+        self.last_edit = EditKind::None;
+        true
+    }
+
     /// Replace the byte range `[start, end)` with `replacement`.
     /// Cursor is placed at `start + replacement.len()`.
     pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) {
+        self.record(EditKind::Other);
         self.buffer.replace_range(start..end, replacement);
         self.cursor = start + replacement.len();
     }
@@ -61,6 +149,12 @@ impl InputEditor {
 
     /// Insert text at the cursor position.
     pub fn insert_str(&mut self, text: &str) {
+        let kind = match text.chars().next() {
+            Some(c) if text.chars().count() == 1 && c.is_whitespace() => EditKind::TypeSpace,
+            Some(_) if text.chars().count() == 1 => EditKind::TypeWord,
+            _ => EditKind::Other, // paste, newline, multi-char
+        };
+        self.record(kind);
         self.buffer.insert_str(self.cursor, text);
         self.cursor += text.len();
     }
@@ -70,6 +164,7 @@ impl InputEditor {
         if self.cursor == 0 {
             return;
         }
+        self.record(EditKind::Backspace);
         let prev = self.prev_char_boundary();
         self.buffer.replace_range(prev..self.cursor, "");
         self.cursor = prev;
@@ -80,28 +175,38 @@ impl InputEditor {
         if self.cursor >= self.buffer.len() {
             return;
         }
+        self.record(EditKind::DeleteForward);
         let next = self.next_char_boundary();
         self.buffer.replace_range(self.cursor..next, "");
     }
 
     pub fn move_left(&mut self) {
+        self.break_group();
         self.cursor = self.prev_char_boundary();
     }
 
     pub fn move_right(&mut self) {
+        self.break_group();
         self.cursor = self.next_char_boundary();
     }
 
     pub fn home(&mut self) {
+        self.break_group();
         self.cursor = 0;
     }
 
     pub fn end(&mut self) {
+        self.break_group();
         self.cursor = self.buffer.len();
     }
 
     /// Clear the buffer without returning its contents. Used by Ctrl+C.
+    /// Undoable — a stray Ctrl+C shouldn't cost you a long command.
     pub fn clear(&mut self) {
+        if self.buffer.is_empty() {
+            return;
+        }
+        self.record(EditKind::Other);
         self.buffer.clear();
         self.cursor = 0;
     }
@@ -114,6 +219,9 @@ impl InputEditor {
         self.cursor = 0;
         self.history_cursor = None;
         self.saved_buffer = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_edit = EditKind::None;
         self.history.append(line.clone());
         line
     }
@@ -145,6 +253,7 @@ impl InputEditor {
         if self.history.is_empty() {
             return;
         }
+        self.record(EditKind::Other);
         let new_idx = match self.history_cursor {
             None => {
                 self.saved_buffer = Some(self.buffer.clone());
@@ -167,6 +276,9 @@ impl InputEditor {
     /// Recall the next history entry. If past the end, restore the
     /// saved draft and return to "typing new command" state.
     pub fn history_next(&mut self) {
+        if self.history_cursor.is_some() {
+            self.record(EditKind::Other);
+        }
         match self.history_cursor {
             None => {}
             Some(i) if i + 1 >= self.history.len() => {
@@ -238,6 +350,7 @@ impl InputEditor {
     /// Move the cursor to the first character of the current line.
     /// On a single-line buffer this is identical to `home()`.
     pub fn home_line(&mut self) {
+        self.break_group();
         self.cursor = self.current_line_start();
     }
 
@@ -245,6 +358,7 @@ impl InputEditor {
     /// just before the trailing `\n`, or the buffer end on the
     /// final line.
     pub fn end_line(&mut self) {
+        self.break_group();
         let rel = self.buffer[self.cursor..]
             .find('\n')
             .unwrap_or(self.buffer.len() - self.cursor);
@@ -262,6 +376,7 @@ impl InputEditor {
     /// possible (clamped to the length of the target line).
     /// Returns `false` if already on line 0.
     pub fn move_up(&mut self) -> bool {
+        self.break_group();
         let current_start = self.current_line_start();
         if current_start == 0 {
             return false; // already on the first line
@@ -291,6 +406,7 @@ impl InputEditor {
     /// possible (clamped to the length of the target line).
     /// Returns `false` if already on the last line.
     pub fn move_down(&mut self) -> bool {
+        self.break_group();
         let current_start = self.current_line_start();
         let col = self.buffer[current_start..self.cursor].chars().count();
 
@@ -426,5 +542,78 @@ mod tests {
         e.insert_str("world");
         assert_eq!(e.line_count(), 2);
         assert_eq!(e.buffer(), "hello\nworld");
+    }
+
+    // ---- undo / redo (F17) ----
+
+    fn type_str(e: &mut InputEditor, text: &str) {
+        for ch in text.chars() {
+            e.insert_str(&ch.to_string());
+        }
+    }
+
+    #[test]
+    fn typing_coalesces_by_word_and_undo_redo_round_trips() {
+        let mut e = InputEditor::new();
+        type_str(&mut e, "git commit");
+        assert_eq!(e.buffer(), "git commit");
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "git ", "one word (and its space) per step");
+        assert_eq!(e.cursor(), 4);
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "");
+        assert!(!e.undo(), "nothing left");
+        assert!(e.redo());
+        assert_eq!(e.buffer(), "git ");
+        assert!(e.redo());
+        assert_eq!(e.buffer(), "git commit");
+        assert!(!e.redo());
+    }
+
+    #[test]
+    fn backspaces_coalesce_and_new_edit_clears_redo() {
+        let mut e = InputEditor::new();
+        type_str(&mut e, "hello");
+        e.backspace();
+        e.backspace();
+        assert_eq!(e.buffer(), "hel");
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "hello", "both backspaces undone together");
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "");
+        assert!(e.redo());
+        assert_eq!(e.buffer(), "hello");
+        type_str(&mut e, "!");
+        assert!(!e.redo(), "a fresh edit clears the redo stack");
+        assert_eq!(e.buffer(), "hello!");
+    }
+
+    #[test]
+    fn movement_splits_groups_and_paste_clear_are_own_steps() {
+        let mut e = InputEditor::new();
+        type_str(&mut e, "ab");
+        e.move_left();
+        type_str(&mut e, "X");
+        assert_eq!(e.buffer(), "aXb");
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "ab", "typing after a move is its own group");
+        e.end();
+        e.insert_str(" && make"); // paste: multi-char
+        assert_eq!(e.buffer(), "ab && make");
+        e.clear();
+        assert_eq!(e.buffer(), "");
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "ab && make", "clear is undoable");
+        assert!(e.undo());
+        assert_eq!(e.buffer(), "ab", "paste is one step");
+    }
+
+    #[test]
+    fn take_line_resets_undo_history() {
+        let mut e = InputEditor::new();
+        type_str(&mut e, "ls");
+        let _ = e.take_line();
+        assert!(!e.undo());
+        assert_eq!(e.buffer(), "");
     }
 }
