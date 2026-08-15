@@ -14,5 +14,6 @@ mod selection;
 mod ui;
 
 pub use atlas::GlyphStyle;
+pub use output::PaneView;
 pub use renderer::{AltBgPolicy, CellMetrics, Renderer};
 pub use ui::PopupKind;

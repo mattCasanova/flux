@@ -6,22 +6,38 @@
 use super::{App, PopupState};
 
 impl App {
-    /// Render the terminal grid.
+    /// Render every pane of the current tab. The focused pane decides
+    /// the window's padding color and shows the shell cursor when the
+    /// PTY owns the keyboard (alt screen OR a running command — sudo,
+    /// ssh, REPLs); at the prompt the input bar owns cursor display.
     pub(super) fn update_display(&mut self) {
-        let Some(pane) = self.mux.focused_pane_mut() else {
+        let Some(tab) = self.mux.focused_tab_mut() else {
             return;
         };
-        // While the PTY owns the keyboard (alt screen OR a running
-        // command — sudo, ssh, REPLs), the shell's own cursor is the
-        // only cursor there is; show it. At the prompt the input bar
-        // owns cursor display.
-        let show_cursor = pane.terminal.is_alt_screen() || pane.terminal.is_executing();
-        let grid = pane.terminal.grid_snapshot();
+        let focus = tab.focus;
+        let mut frames: Vec<(u64, flux_types::TerminalGrid, flux_renderer::PaneView)> = Vec::new();
+        for pane in tab.root.panes_mut() {
+            let alt = pane.terminal.is_alt_screen();
+            let is_focus = pane.id == focus;
+            let show_cursor = is_focus && (alt || pane.terminal.is_executing());
+            let grid = pane.terminal.grid_snapshot();
+            frames.push((
+                pane.id,
+                grid,
+                flux_renderer::PaneView {
+                    origin: [pane.viewport.x, pane.viewport.y],
+                    bottom_anchor: !alt,
+                    show_cursor,
+                    drives_clear_color: is_focus,
+                },
+            ));
+        }
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        renderer.set_show_shell_cursor(show_cursor);
-        renderer.set_grid(&grid);
+        for (id, grid, view) in &frames {
+            renderer.set_pane_grid(*id, grid, *view);
+        }
     }
 
     /// Push the current input editor state to the renderer. If the

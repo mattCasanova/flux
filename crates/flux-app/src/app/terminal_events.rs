@@ -21,9 +21,10 @@ impl App {
         let mut any_title = false;
         let mut exited_panes: Vec<u64> = Vec::new();
         let focused_id = self.mux.focused_pane().map(|pane| pane.id);
+        let current_tab = self.mux.current_tab;
+        let mut titles: Vec<(usize, String)> = Vec::new();
 
-        for tab in &mut self.mux.tabs {
-            let pane = &mut tab.pane;
+        for (tab_idx, pane) in self.mux.all_panes_mut() {
             let mut dirty = false;
             for event in pane.pty.read_events() {
                 match event {
@@ -39,7 +40,8 @@ impl App {
             if !dirty {
                 continue;
             }
-            if Some(pane.id) == focused_id {
+            // Any pane of the current tab is on screen.
+            if tab_idx == current_tab {
                 focused_dirty = true;
             }
             for event in pane.terminal.drain_events() {
@@ -48,13 +50,21 @@ impl App {
                         let _ = pane.pty.write(text.as_bytes());
                     }
                     TermEvent::Title(title) => {
-                        tab.title = Some(title);
-                        any_title = true;
+                        // Only the focused pane names its tab.
+                        if Some(pane.id) == focused_id {
+                            titles.push((tab_idx, title));
+                            any_title = true;
+                        }
                     }
                     TermEvent::Bell => {
                         log::debug!("Bell");
                     }
                 }
+            }
+        }
+        for (tab_idx, title) in titles {
+            if let Some(tab) = self.mux.tabs.get_mut(tab_idx) {
+                tab.title = Some(title);
             }
         }
 

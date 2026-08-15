@@ -38,6 +38,13 @@ pub enum Action {
     ScrollPageDown,
     PrevBlock,
     NextBlock,
+    SplitRight,
+    SplitDown,
+    ClosePane,
+    FocusPaneLeft,
+    FocusPaneRight,
+    FocusPaneUp,
+    FocusPaneDown,
 }
 
 impl Action {
@@ -52,6 +59,13 @@ impl Action {
                 | Action::PrevTab
                 | Action::Tab(_)
                 | Action::Find
+                | Action::SplitRight
+                | Action::SplitDown
+                | Action::ClosePane
+                | Action::FocusPaneLeft
+                | Action::FocusPaneRight
+                | Action::FocusPaneUp
+                | Action::FocusPaneDown
         )
     }
 
@@ -81,6 +95,13 @@ impl Action {
             Action::ScrollPageDown => "scroll_page_down".into(),
             Action::PrevBlock => "prev_block".into(),
             Action::NextBlock => "next_block".into(),
+            Action::SplitRight => "split_right".into(),
+            Action::SplitDown => "split_down".into(),
+            Action::ClosePane => "close_pane".into(),
+            Action::FocusPaneLeft => "focus_pane_left".into(),
+            Action::FocusPaneRight => "focus_pane_right".into(),
+            Action::FocusPaneUp => "focus_pane_up".into(),
+            Action::FocusPaneDown => "focus_pane_down".into(),
         }
     }
 
@@ -101,6 +122,13 @@ impl Action {
             "scroll_page_down" => Action::ScrollPageDown,
             "prev_block" => Action::PrevBlock,
             "next_block" => Action::NextBlock,
+            "split_right" => Action::SplitRight,
+            "split_down" => Action::SplitDown,
+            "close_pane" => Action::ClosePane,
+            "focus_pane_left" => Action::FocusPaneLeft,
+            "focus_pane_right" => Action::FocusPaneRight,
+            "focus_pane_up" => Action::FocusPaneUp,
+            "focus_pane_down" => Action::FocusPaneDown,
             _ => {
                 let n: u8 = name.strip_prefix("tab_")?.parse().ok()?;
                 if (1..=9).contains(&n) {
@@ -130,6 +158,13 @@ impl Action {
             Action::ScrollPageDown,
             Action::PrevBlock,
             Action::NextBlock,
+            Action::SplitRight,
+            Action::SplitDown,
+            Action::ClosePane,
+            Action::FocusPaneLeft,
+            Action::FocusPaneRight,
+            Action::FocusPaneUp,
+            Action::FocusPaneDown,
         ];
         all.extend((1..=9).map(Action::Tab));
         all
@@ -296,6 +331,13 @@ impl Keymap {
         bind(Action::ScrollPageDown, "pagedown".into());
         bind(Action::PrevBlock, format!("{edit}+shift+up"));
         bind(Action::NextBlock, format!("{edit}+shift+down"));
+        bind(Action::SplitRight, format!("{primary}+d"));
+        bind(Action::SplitDown, format!("{primary}+shift+d"));
+        bind(Action::ClosePane, format!("{primary}+shift+w"));
+        bind(Action::FocusPaneLeft, format!("{primary}+alt+left"));
+        bind(Action::FocusPaneRight, format!("{primary}+alt+right"));
+        bind(Action::FocusPaneUp, format!("{primary}+alt+up"));
+        bind(Action::FocusPaneDown, format!("{primary}+alt+down"));
         map
     }
 

@@ -64,8 +64,14 @@ pub struct Renderer {
     pub(crate) instance_buffer: wgpu::Buffer,
     pub(crate) instance_capacity: usize,
     pub(crate) instance_count: u32,
-    /// Instances for the output grid — rebuilt on `set_grid`.
-    pub(crate) output_instances: Vec<CellInstance>,
+    /// Per-pane output instances — rebuilt on `set_pane_grid`.
+    pub(crate) pane_instances: std::collections::HashMap<u64, Vec<CellInstance>>,
+    /// Per-pane bottom-anchor shift in rows (mouse mapping reads it).
+    pub(crate) pane_y_shift: std::collections::HashMap<u64, usize>,
+    /// Per-pane scrollbar instances.
+    pub(crate) pane_scrollbars: std::collections::HashMap<u64, Vec<CellInstance>>,
+    /// Split dividers + focused-pane accent, rebuilt by `set_pane_frames`.
+    pub(crate) frame_instances: Vec<CellInstance>,
     /// Instances for the fixed input chrome — rebuilt on `set_input_line`.
     pub(crate) input_instances: Vec<CellInstance>,
     /// Instances for popup overlays (F7 autocomplete, F14 search
@@ -77,9 +83,6 @@ pub struct Renderer {
     /// (F12). Drawn after output so the tint composites over the grid,
     /// before input/popup so chrome stays readable.
     pub(crate) selection_instances: Vec<CellInstance>,
-    /// Scrollbar track + thumb while the viewport is scrolled into
-    /// history — rebuilt on `set_grid`, drawn over the selection tint.
-    pub(crate) scrollbar_instances: Vec<CellInstance>,
     /// Tab bar across the top (only with 2+ tabs) — rebuilt by
     /// `set_tab_bar`, drawn with the input chrome.
     pub(crate) tab_instances: Vec<CellInstance>,
@@ -88,10 +91,6 @@ pub struct Renderer {
     /// output/selection/scrollbar rendering; the app adds the same
     /// offset in pixel→cell mapping.
     pub(crate) content_top: f32,
-    /// Bottom-anchor shift of the last `set_grid`, in rows. Cached so
-    /// selection rendering and the app's pixel→cell mapping agree with
-    /// what's actually on screen.
-    pub(crate) current_y_shift_rows: usize,
     /// Padding behavior under alt-screen programs. See [AltBgPolicy].
     pub(crate) alt_bg_policy: AltBgPolicy,
     /// Optional padding tint while the viewport is scrolled into
@@ -166,14 +165,15 @@ impl Renderer {
             instance_buffer,
             instance_capacity: INITIAL_MAX_CELLS,
             instance_count: 0,
-            output_instances: Vec::with_capacity(INITIAL_MAX_CELLS),
+            pane_instances: std::collections::HashMap::new(),
+            pane_y_shift: std::collections::HashMap::new(),
+            pane_scrollbars: std::collections::HashMap::new(),
+            frame_instances: Vec::new(),
             input_instances: Vec::with_capacity(64),
             popup_instances: Vec::new(),
             selection_instances: Vec::new(),
-            scrollbar_instances: Vec::new(),
             tab_instances: Vec::new(),
             content_top: 0.0,
-            current_y_shift_rows: 0,
             alt_bg_policy: AltBgPolicy::Sync,
             scrolled_bg: None,
             alt_bg_candidate: None,
@@ -226,8 +226,70 @@ impl Renderer {
     /// Rows of blank space above the output in bottom-anchor mode, as
     /// of the last `set_grid`. The app's pixel→cell mapping subtracts
     /// this so clicks land on the grid rows actually shown.
+    /// Bottom-anchor shift (rows) of `pane_id`'s last frame — mouse
+    /// mapping needs it to invert the layout.
+    pub fn pane_y_shift_rows(&self, pane_id: u64) -> usize {
+        self.pane_y_shift.get(&pane_id).copied().unwrap_or(0)
+    }
+
+    /// Forget every pane (tab switch): the new tab's panes repaint from
+    /// scratch and nothing from the old tab lingers.
+    pub fn clear_panes(&mut self) {
+        self.pane_instances.clear();
+        self.pane_y_shift.clear();
+        self.pane_scrollbars.clear();
+        self.frame_instances.clear();
+        self.rebuild_combined_buffer();
+    }
+
+    /// Forget a pane that closed.
+    pub fn remove_pane(&mut self, pane_id: u64) {
+        self.pane_instances.remove(&pane_id);
+        self.pane_y_shift.remove(&pane_id);
+        self.pane_scrollbars.remove(&pane_id);
+        self.rebuild_combined_buffer();
+    }
+
+    /// Draw split dividers (`gutters`) and an accent along the focused
+    /// pane's top edge when there is more than one pane.
+    pub fn set_pane_frames(
+        &mut self,
+        gutters: &[flux_types::Rect],
+        focused: Option<flux_types::Rect>,
+    ) {
+        let divider = Color::new(0.30, 0.33, 0.45, 1.0);
+        let accent = Color::new(0.478, 0.635, 0.969, 0.9);
+        let rect = |r: flux_types::Rect, c: Color| CellInstance {
+            position: [r.x, r.y],
+            size: [r.width, r.height],
+            glyph_uv: [0.0, 0.0, 0.0, 0.0],
+            fg_color: [c.r, c.g, c.b, c.a],
+            bg_color: [c.r, c.g, c.b, c.a],
+        };
+        self.frame_instances.clear();
+        for g in gutters {
+            // A 1px line centered in the gutter.
+            let line = if g.width < g.height {
+                flux_types::Rect::new(g.x + (g.width - 1.0) * 0.5, g.y, 1.0, g.height)
+            } else {
+                flux_types::Rect::new(g.x, g.y + (g.height - 1.0) * 0.5, g.width, 1.0)
+            };
+            self.frame_instances.push(rect(line, divider));
+        }
+        if let Some(f) = focused
+            && !gutters.is_empty()
+        {
+            self.frame_instances.push(rect(
+                flux_types::Rect::new(f.x, f.y - 2.0, f.width, 1.5),
+                accent,
+            ));
+        }
+        self.rebuild_combined_buffer();
+    }
+
+    #[allow(dead_code)] // single-pane callers; kept for the wrapper API
     pub fn current_y_shift_rows(&self) -> usize {
-        self.current_y_shift_rows
+        self.pane_y_shift_rows(0)
     }
 
     /// Rebuild the glyph atlas with a new font size (e.g., after scale factor change).

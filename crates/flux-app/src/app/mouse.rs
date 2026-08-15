@@ -169,6 +169,13 @@ impl App {
                 self.select_tab(index);
                 return;
             }
+            // Clicking another pane focuses it; the click continues as a
+            // click in that pane.
+            if let Some(id) = self.pane_at_pixel(pos)
+                && self.mux.focused_pane().map(|p| p.id) != Some(id)
+            {
+                self.focus_pane(id);
+            }
         }
 
         // When the program requested mouse reporting (vim `mouse=a`,
@@ -368,38 +375,56 @@ impl App {
         self.request_redraw();
     }
 
-    /// Map a physical pixel position to an output-grid cell. Returns
-    /// `None` outside the output area (padding, bottom-anchor blank
-    /// space above the output, or the input bar below it).
-    pub(super) fn pixel_to_cell(&self, pos: PhysicalPosition<f64>) -> Option<CellPos> {
+    /// The focused pane's viewport, cell metrics, and bottom-anchor
+    /// shift — everything pixel→cell mapping needs.
+    fn focused_pane_geometry(&self) -> Option<(flux_types::Rect, f64, f64, usize, usize, usize)> {
         let renderer = self.renderer.as_ref()?;
-        let term = self.terminal()?;
-        let metrics = renderer.cell_metrics();
+        let pane = self.mux.focused_pane()?;
+        let m = renderer.cell_metrics();
+        Some((
+            pane.viewport,
+            m.width as f64,
+            m.height as f64,
+            renderer.pane_y_shift_rows(pane.id),
+            pane.terminal.cols(),
+            pane.terminal.rows(),
+        ))
+    }
 
-        let scale = self
-            .window
-            .as_ref()
-            .map(|w| w.scale_factor())
-            .unwrap_or(1.0);
-        let pad_x = self.config.window.padding_horizontal as f64 * scale;
-        let pad_y =
-            self.config.window.padding_vertical as f64 * scale + renderer.content_top() as f64;
+    /// Which pane of the current tab a pixel lands in, if any.
+    pub(super) fn pane_at_pixel(&self, pos: PhysicalPosition<f64>) -> Option<u64> {
+        let tab = self.mux.focused_tab()?;
+        tab.root.panes().into_iter().find_map(|p| {
+            let r = p.viewport;
+            let inside = pos.x >= r.x as f64
+                && pos.x < (r.x + r.width) as f64
+                && pos.y >= r.y as f64
+                && pos.y < (r.y + r.height) as f64;
+            inside.then_some(p.id)
+        })
+    }
 
-        let x = pos.x - pad_x;
-        let y = pos.y - pad_y;
-        if x < 0.0 || y < 0.0 {
+    /// Map a physical pixel position to a cell of the FOCUSED pane's
+    /// grid. Returns `None` outside that pane (padding, other panes,
+    /// bottom-anchor blank space above the output, the input bar).
+    pub(super) fn pixel_to_cell(&self, pos: PhysicalPosition<f64>) -> Option<CellPos> {
+        let (vp, cell_w, cell_h, y_shift_rows, cols, rows) = self.focused_pane_geometry()?;
+
+        let x = pos.x - vp.x as f64;
+        let y = pos.y - vp.y as f64;
+        if x < 0.0 || y < 0.0 || x >= vp.width as f64 || y >= vp.height as f64 {
             return None;
         }
 
-        let col = (x / metrics.width as f64) as usize;
-        let visual_row = (y / metrics.height as f64) as usize;
+        let col = (x / cell_w) as usize;
+        let visual_row = (y / cell_h) as usize;
 
         // Undo the bottom-anchor shift: visual row N shows grid row
         // N - y_shift_rows. Clicks in the blank space above the output
         // have no grid cell.
-        let row = visual_row.checked_sub(renderer.current_y_shift_rows())?;
+        let row = visual_row.checked_sub(y_shift_rows)?;
 
-        if row >= term.rows() || col >= term.cols() {
+        if row >= rows || col >= cols {
             return None;
         }
         Some(CellPos { col, row })
@@ -409,33 +434,18 @@ impl App {
     /// drag past the boundary keeps extending the selection. Also
     /// reports which half of the cell the pointer is in.
     fn pixel_to_cell_clamped(&self, pos: PhysicalPosition<f64>) -> (CellPos, bool) {
-        let (cell_w, cell_h, y_shift_rows, content_top) = self
-            .renderer
-            .as_ref()
-            .map(|r| {
-                let m = r.cell_metrics();
-                (
-                    m.width as f64,
-                    m.height as f64,
-                    r.current_y_shift_rows(),
-                    r.content_top() as f64,
-                )
-            })
-            .unwrap_or((8.0, 16.0, 0, 0.0));
-        let (cols, rows) = self
-            .terminal()
-            .map(|t| (t.cols(), t.rows()))
-            .unwrap_or((1, 1));
-        let scale = self
-            .window
-            .as_ref()
-            .map(|w| w.scale_factor())
-            .unwrap_or(1.0);
-        let pad_x = self.config.window.padding_horizontal as f64 * scale;
-        let pad_y = self.config.window.padding_vertical as f64 * scale + content_top;
+        let (vp, cell_w, cell_h, y_shift_rows, cols, rows) =
+            self.focused_pane_geometry().unwrap_or((
+                flux_types::Rect::new(0.0, 0.0, 0.0, 0.0),
+                8.0,
+                16.0,
+                0,
+                1,
+                1,
+            ));
 
-        let x = (pos.x - pad_x).max(0.0);
-        let y = (pos.y - pad_y).max(0.0);
+        let x = (pos.x - vp.x as f64).max(0.0);
+        let y = (pos.y - vp.y as f64).max(0.0);
         let col = ((x / cell_w) as usize).min(cols.saturating_sub(1));
         let visual_row = (y / cell_h) as usize;
         let row = visual_row

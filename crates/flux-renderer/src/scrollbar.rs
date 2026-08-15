@@ -7,6 +7,7 @@
 //! Rebuilt from `set_grid`, so it always agrees with what's painted.
 
 use crate::core::CellInstance;
+use crate::output::PaneView;
 use crate::renderer::Renderer;
 use flux_types::{Color, TerminalGrid};
 
@@ -16,29 +17,24 @@ const THUMB: Color = Color::new(0.60, 0.65, 0.80, 0.55);
 const TRACK: Color = Color::new(0.60, 0.65, 0.80, 0.10);
 
 impl Renderer {
-    pub(crate) fn set_scrollbar(&mut self, grid: &TerminalGrid) {
-        let mut instances = std::mem::take(&mut self.scrollbar_instances);
+    pub(crate) fn set_scrollbar(&mut self, pane_id: u64, grid: &TerminalGrid, view: PaneView) {
+        let mut instances = self.pane_scrollbars.remove(&pane_id).unwrap_or_default();
         instances.clear();
 
         // Only while scrolled up, and only if there is history to show
         // (alt-screen grids report none).
         if grid.display_offset > 0 && grid.history_size > 0 && grid.rows > 0 {
             let cell_h = self.atlas.cell_height;
-            let window_w = self.gpu.surface_config.width as f32;
-            let pad_x = self.padding_x;
-            let pad_y = self.padding_y;
+            let cell_w = self.atlas.cell_width;
 
-            let area_y = pad_y + self.content_top;
+            let area_y = view.origin[1];
             let area_h = grid.rows as f32 * cell_h;
 
-            // Sit centered in the right padding when there is room,
-            // else hug the window edge over the last column.
-            let width = (pad_x * 0.3).clamp(2.0, 5.0);
-            let x = if pad_x >= width + 2.0 {
-                window_w - pad_x + (pad_x - width) * 0.5
-            } else {
-                window_w - width - 1.0
-            };
+            // Right edge of the pane's grid; the bar sits just past the
+            // last column (in the padding for a full-width pane, in the
+            // split gutter otherwise).
+            let width = (self.padding_x * 0.3).clamp(2.0, 5.0);
+            let x = view.origin[0] + grid.cols as f32 * cell_w + 1.0;
 
             let total = (grid.history_size + grid.rows) as f32;
             let min_thumb = cell_h.max(12.0);
@@ -60,6 +56,6 @@ impl Renderer {
             instances.push(rect(x, thumb_y, width, thumb_h, THUMB));
         }
 
-        self.scrollbar_instances = instances;
+        self.pane_scrollbars.insert(pane_id, instances);
     }
 }

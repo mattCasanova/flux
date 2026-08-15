@@ -125,7 +125,9 @@ impl App {
             // shell. Visible at startup — their invisible bootstraps
             // (--rcfile / vendor_conf.d) are future work.
             let source_cmd = format!("source '{}'\n", script.display());
-            let _ = tab.pane.pty.write(source_cmd.as_bytes());
+            if let Some(pane) = tab.focused_pane_mut() {
+                let _ = pane.pty.write(source_cmd.as_bytes());
+            }
             log::info!("Shell integration injected: {}", script.display());
         }
 

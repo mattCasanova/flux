@@ -9,6 +9,20 @@ use crate::core::{CellInstance, color_matches};
 use crate::renderer::Renderer;
 use flux_types::{CellFlags, Color, TerminalGrid};
 
+/// Where and how one pane's grid is painted.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneView {
+    /// Top-left pixel of the pane's cell (0,0).
+    pub origin: [f32; 2],
+    /// Bottom-anchor rows on the cursor/anchor row (cooked mode).
+    pub bottom_anchor: bool,
+    /// Draw the shell's cursor block.
+    pub show_cursor: bool,
+    /// This pane decides the window padding color (alt-screen sync,
+    /// scrolled tint). Exactly one pane per frame should.
+    pub drives_clear_color: bool,
+}
+
 /// Blend the selection tint (theme blue at 30%) over a cell's
 /// background — opaque result, standard source-over.
 fn blend_selection_tint(bg: Color) -> Color {
@@ -127,18 +141,34 @@ impl Renderer {
     /// starts scrolling, the anchor is at row `rows-1` and behavior matches a
     /// normal top-anchored terminal.
     ///
-    /// The shell's own cursor block is intentionally not drawn — Flux owns
-    /// input via the fixed editor below, so the shell cursor is redundant
-    /// noise. (Raw-mode bypass will need to re-enable it — see the raw-mode
-    /// item on Phase 1.)
+    /// The shell's own cursor block is drawn only when `view.show_cursor`
+    /// (the PTY owns the keyboard); at the prompt Flux's input editor
+    /// owns cursor display.
+    ///
+    /// Single-pane convenience: renders into the whole content area
+    /// with the renderer-level anchor/cursor flags.
     pub fn set_grid(&mut self, grid: &flux_types::TerminalGrid) {
+        let view = PaneView {
+            origin: [self.padding_x, self.padding_y + self.content_top],
+            bottom_anchor: self.bottom_anchor,
+            show_cursor: self.show_shell_cursor,
+            drives_clear_color: true,
+        };
+        self.set_pane_grid(0, grid, view);
+    }
+
+    /// Render one pane's grid at `view.origin`. Instances are kept per
+    /// pane so several panes can be on screen; the pane's row shift is
+    /// remembered for mouse mapping. Only the pane with
+    /// `drives_clear_color` decides the window's padding color.
+    pub fn set_pane_grid(&mut self, pane_id: u64, grid: &flux_types::TerminalGrid, view: PaneView) {
         let cell_w = self.atlas.cell_width;
         let cell_h = self.atlas.cell_height;
         let baseline = self.atlas.baseline_offset;
-        let pad_x = self.padding_x;
-        let pad_y = self.padding_y + self.content_top;
+        let pad_x = view.origin[0];
+        let pad_y = view.origin[1];
 
-        let y_shift_rows = if self.bottom_anchor {
+        let y_shift_rows = if view.bottom_anchor {
             let anchor_row = grid
                 .cursor
                 .map(|(_, r)| r)
@@ -148,7 +178,7 @@ impl Renderer {
         } else {
             0
         };
-        self.current_y_shift_rows = y_shift_rows;
+        self.pane_y_shift.insert(pane_id, y_shift_rows);
         let y_shift = y_shift_rows as f32 * cell_h;
 
         // Padding / clear color policy:
@@ -162,34 +192,44 @@ impl Renderer {
         // - Cooked + scrolled into history: optional `scrolled_bg` tint
         //   as a "not at the live tail" cue.
         // - Otherwise: the user's theme background.
-        self.effective_clear_color = if !self.bottom_anchor && grid.rows > 0 && grid.cols > 0 {
-            match self.alt_bg_policy {
-                crate::renderer::AltBgPolicy::Sync => self.debounced_edge_bg(grid),
-                crate::renderer::AltBgPolicy::Theme => self.clear_color,
-                crate::renderer::AltBgPolicy::Fixed(color) => color,
-            }
-        } else {
-            // Leaving (or never on) the alt screen: reset the debounce
-            // so the next alt-screen program starts a fresh election.
-            self.alt_bg_candidate = None;
-            self.alt_bg_streak = 0;
-            self.alt_bg_committed = None;
-            if grid.display_offset > 0
-                && let Some(scrolled) = self.scrolled_bg
-            {
-                scrolled
+        if view.drives_clear_color {
+            self.effective_clear_color = if !view.bottom_anchor && grid.rows > 0 && grid.cols > 0 {
+                match self.alt_bg_policy {
+                    crate::renderer::AltBgPolicy::Sync => self.debounced_edge_bg(grid),
+                    crate::renderer::AltBgPolicy::Theme => self.clear_color,
+                    crate::renderer::AltBgPolicy::Fixed(color) => color,
+                }
             } else {
-                self.clear_color
-            }
-        };
+                // Leaving (or never on) the alt screen: reset the debounce
+                // so the next alt-screen program starts a fresh election.
+                self.alt_bg_candidate = None;
+                self.alt_bg_streak = 0;
+                self.alt_bg_committed = None;
+                if grid.display_offset > 0
+                    && let Some(scrolled) = self.scrolled_bg
+                {
+                    scrolled
+                } else {
+                    self.clear_color
+                }
+            };
+        }
 
-        let mut instances = std::mem::take(&mut self.output_instances);
+        let mut instances = self.pane_instances.remove(&pane_id).unwrap_or_default();
         instances.clear();
+        // Cells whose bg matches the padding are skipped as an
+        // optimization — only valid for the pane that owns the padding
+        // color; every other pane paints all its cells.
+        let clear = if view.drives_clear_color {
+            self.effective_clear_color
+        } else {
+            Color::new(-1.0, -1.0, -1.0, 0.0)
+        };
 
         // Draw the shell's cursor block first (so any underlying glyph paints on top).
         // Uses the full cell height so the cursor matches the line grid
         // uniformly regardless of which glyph sits under it.
-        if self.show_shell_cursor
+        if view.show_cursor
             && !grid.cursor_hidden
             && let Some((col, row)) = grid.cursor
         {
@@ -214,8 +254,6 @@ impl Renderer {
                 ],
             });
         }
-
-        let clear = self.effective_clear_color;
 
         for row in 0..grid.rows {
             for col in 0..grid.cols {
@@ -297,8 +335,8 @@ impl Renderer {
             }
         }
 
-        self.output_instances = instances;
-        self.set_scrollbar(grid);
+        self.pane_instances.insert(pane_id, instances);
+        self.set_scrollbar(pane_id, grid, view);
         self.rebuild_combined_buffer();
     }
 }

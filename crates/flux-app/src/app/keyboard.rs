@@ -101,6 +101,13 @@ impl App {
             Action::ScrollPageDown => self.scroll_page(false),
             Action::PrevBlock => self.jump_block(-1),
             Action::NextBlock => self.jump_block(1),
+            Action::SplitRight => self.split_focused(crate::mux::SplitAxis::Horizontal),
+            Action::SplitDown => self.split_focused(crate::mux::SplitAxis::Vertical),
+            Action::ClosePane => self.close_focused_pane(),
+            Action::FocusPaneLeft => self.focus_pane_direction(-1, 0),
+            Action::FocusPaneRight => self.focus_pane_direction(1, 0),
+            Action::FocusPaneUp => self.focus_pane_direction(0, -1),
+            Action::FocusPaneDown => self.focus_pane_direction(0, 1),
         }
         true
     }

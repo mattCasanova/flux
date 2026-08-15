@@ -8,6 +8,7 @@
 use flux_terminal::state::TerminalState;
 
 use super::App;
+use crate::mux::SplitAxis;
 
 impl App {
     /// Open a new tab with a fresh shell and focus it.
@@ -45,19 +46,91 @@ impl App {
         }
     }
 
-    /// Close the tab whose shell exited (found by pane id).
+    /// A shell exited: drop its pane; if that empties its tab, close
+    /// the tab (and the app when it was the last one).
     pub(super) fn close_tab_with_pane(&mut self, pane_id: u64) {
-        let Some(index) = self.mux.tabs.iter().position(|tab| tab.pane.id == pane_id) else {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.remove_pane(pane_id);
+        }
+        match self.mux.remove_pane_anywhere(pane_id) {
+            Some(tab_index) => {
+                let was_current = tab_index == self.mux.current_tab;
+                if self.mux.close_tab(tab_index) {
+                    self.shell_exited = true;
+                    self.request_redraw();
+                } else if was_current {
+                    self.after_tab_switch();
+                } else {
+                    self.update_tab_bar();
+                }
+            }
+            None => self.after_tab_switch(),
+        }
+    }
+
+    // ---- splits ----
+
+    /// Split the focused pane; the new shell goes right (Horizontal)
+    /// or below (Vertical) and takes focus.
+    pub(super) fn split_focused(&mut self, axis: SplitAxis) {
+        let (cols, rows) = self.grid_dims_for_new_pane();
+        let mut terminal = TerminalState::new(
+            cols.max(1),
+            rows.max(1),
+            self.config.scrollback.lines,
+            self.config.theme.resolve(),
+        );
+        terminal.set_blocks_enabled(self.config.blocks.enabled);
+        let proxy = self.proxy.clone();
+        let wake = Box::new(move || {
+            let _ = proxy.send_event(());
+        });
+        match self.mux.split_focused(
+            axis,
+            0,
+            cols.max(1) as u16,
+            rows.max(1) as u16,
+            wake,
+            terminal,
+        ) {
+            Ok(_) => self.after_tab_switch(),
+            Err(e) => log::error!("split failed: {e:#}"),
+        }
+    }
+
+    /// Close the focused pane; closing a tab's last pane closes the tab.
+    pub(super) fn close_focused_pane(&mut self) {
+        let focused = self.mux.focused_pane().map(|p| p.id);
+        if self.mux.close_focused_pane() {
+            self.close_current_tab();
             return;
-        };
-        let was_focused = index == self.mux.current_tab;
-        if self.mux.close_tab(index) {
-            self.shell_exited = true;
-            self.request_redraw();
-        } else if was_focused {
+        }
+        if let (Some(renderer), Some(id)) = (&mut self.renderer, focused) {
+            renderer.remove_pane(id);
+        }
+        self.after_tab_switch();
+    }
+
+    /// Focus the pane in direction (dx, dy) from the focused one.
+    pub(super) fn focus_pane_direction(&mut self, dx: i32, dy: i32) {
+        let moved = self
+            .mux
+            .focused_tab_mut()
+            .map(|tab| tab.focus_direction(dx, dy))
+            .unwrap_or(false);
+        if moved {
             self.after_tab_switch();
-        } else {
-            self.update_tab_bar();
+        }
+    }
+
+    /// Focus pane `id` in the current tab (mouse click).
+    pub(super) fn focus_pane(&mut self, id: u64) {
+        if let Some(tab) = self.mux.focused_tab_mut()
+            && tab.root.contains(id)
+            && tab.focus != id
+        {
+            tab.focus = id;
+            self.after_tab_switch();
         }
     }
 
@@ -80,6 +153,10 @@ impl App {
         // The search bar is per-pane state; don't carry it across.
         if matches!(self.popup, super::PopupState::Search) {
             self.close_search();
+        }
+        // Panes of the previous tab (or a closed pane) must not linger.
+        if let Some(renderer) = &mut self.renderer {
+            renderer.clear_panes();
         }
         self.apply_window_layout();
         self.sync_raw_mode();
@@ -150,9 +227,8 @@ fn tab_label(tab: &crate::mux::Tab) -> String {
     {
         return title.clone();
     }
-    tab.pane
-        .terminal
-        .cwd()
+    tab.focused_pane()
+        .and_then(|p| p.terminal.cwd())
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "shell".to_string())
 }

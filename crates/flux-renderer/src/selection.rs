@@ -24,7 +24,7 @@ impl Renderer {
         if let Some(sel) = selection {
             let cell_w = self.atlas.cell_width;
             let cell_h = self.atlas.cell_height;
-            let y_shift = self.current_y_shift_rows as f32 * cell_h;
+            let y_shift = self.current_y_shift_rows() as f32 * cell_h;
             let tint = SELECTION_TINT;
 
             for pos in sel.cells(grid_cols) {

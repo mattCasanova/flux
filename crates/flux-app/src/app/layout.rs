@@ -29,22 +29,79 @@ impl App {
         let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
         renderer.set_content_top(bar_h);
         let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - bar_h).max(0.0);
-        let cols = (usable_w / metrics.width) as usize;
-        let total_rows = (usable_h / metrics.height) as usize;
         // 1 divider row + N input lines (dynamic based on editor content).
         let input_lines = self.input.line_count();
         let chrome_rows = if self.raw_mode { 0 } else { 1 + input_lines };
-        let rows = total_rows.saturating_sub(chrome_rows).max(1);
+        let usable_h =
+            (inner_size.height as f32 - pad_y * 2.0 - bar_h - chrome_rows as f32 * metrics.height)
+                .max(0.0);
+        let content = flux_types::Rect::new(pad_x, pad_y + bar_h, usable_w, usable_h);
+        let cell_w = metrics.width;
+        let cell_h = metrics.height;
 
-        if let Some(pane) = self.mux.focused_pane_mut() {
-            pane.terminal.resize(cols.max(1), rows);
-            let _ = pane.pty.resize(cols.max(1) as u16, rows as u16);
+        // Lay the pane tree out over the content rect and size every
+        // pane's grid to its viewport (whole cells only).
+        if let Some(tab) = self.mux.focused_tab_mut() {
+            tab.root.layout(content);
+            for pane in tab.root.panes_mut() {
+                let cols = ((pane.viewport.width / cell_w) as usize).max(1);
+                let rows = ((pane.viewport.height / cell_h) as usize).max(1);
+                if pane.terminal.cols() != cols || pane.terminal.rows() != rows {
+                    pane.terminal.resize(cols, rows);
+                    let _ = pane.pty.resize(cols as u16, rows as u16);
+                }
+            }
         }
+        self.update_pane_frames();
 
         // The bar's background rect spans the window — rebuild it so a
         // resize doesn't leave it at the old width.
         self.update_tab_bar();
+    }
+
+    /// Content rect (pixels) the pane tree is laid out in — same math
+    /// as `apply_window_layout`, for callers that only need the rect.
+    pub(super) fn content_rect(&self) -> Option<flux_types::Rect> {
+        let window = self.window.as_ref()?;
+        let renderer = self.renderer.as_ref()?;
+        let inner_size = window.inner_size();
+        let metrics = renderer.cell_metrics();
+        let pad_x = padding_x(&self.config, window);
+        let pad_y = padding_y(&self.config, window);
+        let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
+        let chrome_rows = if self.raw_mode {
+            0
+        } else {
+            1 + self.input.line_count()
+        };
+        let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
+        let usable_h =
+            (inner_size.height as f32 - pad_y * 2.0 - bar_h - chrome_rows as f32 * metrics.height)
+                .max(0.0);
+        Some(flux_types::Rect::new(
+            pad_x,
+            pad_y + bar_h,
+            usable_w,
+            usable_h,
+        ))
+    }
+
+    /// Push split dividers + focused accent to the renderer.
+    pub(super) fn update_pane_frames(&mut self) {
+        let Some(content) = self.content_rect() else {
+            return;
+        };
+        let (gutters, focused) = match self.mux.focused_tab() {
+            Some(tab) => {
+                let mut g = Vec::new();
+                tab.root.dividers(content, &mut g);
+                (g, tab.focused_pane().map(|p| p.viewport))
+            }
+            None => (Vec::new(), None),
+        };
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_pane_frames(&gutters, focused);
+        }
     }
 
     pub(super) fn handle_resize(&mut self, width: u32, height: u32) {

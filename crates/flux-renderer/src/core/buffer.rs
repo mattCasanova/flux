@@ -41,14 +41,25 @@ impl Renderer {
     /// Grows the GPU buffer if the combined size exceeds current
     /// capacity.
     pub(crate) fn rebuild_combined_buffer(&mut self) {
-        let slices = [
-            &self.output_instances,
-            &self.selection_instances,
-            &self.scrollbar_instances,
-            &self.input_instances,
-            &self.tab_instances,
-            &self.popup_instances,
-        ];
+        // Paint order: panes → selection → scrollbars → frames → input
+        // → tabs → popup.
+        let mut slices: Vec<&Vec<CellInstance>> = Vec::new();
+        let mut pane_ids: Vec<&u64> = self.pane_instances.keys().collect();
+        pane_ids.sort();
+        for id in &pane_ids {
+            slices.push(&self.pane_instances[id]);
+        }
+        slices.push(&self.selection_instances);
+        for id in &pane_ids {
+            if let Some(bar) = self.pane_scrollbars.get(id) {
+                slices.push(bar);
+            }
+        }
+        slices.push(&self.frame_instances);
+        slices.push(&self.input_instances);
+        slices.push(&self.tab_instances);
+        slices.push(&self.popup_instances);
+
         let total: usize = slices.iter().map(|s| s.len()).sum();
         if total == 0 {
             self.instance_count = 0;
@@ -63,14 +74,7 @@ impl Renderer {
         }
 
         let mut offset: u64 = 0;
-        for slice in [
-            &self.output_instances,
-            &self.selection_instances,
-            &self.scrollbar_instances,
-            &self.input_instances,
-            &self.tab_instances,
-            &self.popup_instances,
-        ] {
+        for slice in slices {
             if !slice.is_empty() {
                 self.gpu.queue.write_buffer(
                     &self.instance_buffer,
