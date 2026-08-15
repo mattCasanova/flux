@@ -205,8 +205,40 @@ impl App {
             ElementState::Released => {
                 self.mouse.is_dragging = false;
                 self.mouse.autoscroll = 0;
+                self.maybe_load_block_command();
             }
         }
+    }
+
+    /// A plain single click (no drag) on a block's header row loads
+    /// that command into the input bar — re-run is then just Enter
+    /// (issue #26's minimal form). Anything that selected text is a
+    /// selection, not a click.
+    fn maybe_load_block_command(&mut self) {
+        if self.raw_mode || self.mouse.click_count != 1 {
+            return;
+        }
+        let selected = self
+            .terminal()
+            .map(|t| t.selection_text().is_some())
+            .unwrap_or(false);
+        if selected {
+            return;
+        }
+        let Some(cell) = self.pixel_to_cell(self.mouse.last_cursor_pos) else {
+            return;
+        };
+        let Some(command) = self
+            .terminal()
+            .and_then(|t| t.block_command_at_row(cell.row))
+        else {
+            return;
+        };
+        self.clear_selection();
+        self.input.clear();
+        self.input.insert_str(&command);
+        self.update_input_display();
+        self.request_redraw();
     }
 
     fn handle_mouse_pressed(&mut self) {

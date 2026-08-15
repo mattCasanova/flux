@@ -125,4 +125,17 @@ impl App {
             self.update_display();
         }
     }
+
+    /// Scroll so the previous / next block header sits at the top of
+    /// the viewport (Cmd+Shift+Up / Down).
+    pub(super) fn jump_block(&mut self, step: i32) {
+        let moved = self
+            .pane_mut()
+            .map(|pane| pane.terminal.scroll_to_block(step))
+            .unwrap_or(false);
+        if moved {
+            self.update_display();
+            self.request_redraw();
+        }
+    }
 }

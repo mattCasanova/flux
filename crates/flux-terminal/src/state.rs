@@ -328,6 +328,75 @@ impl TerminalState {
         self.search = None;
     }
 
+    // ---- block navigation (v0.3b seed) ----
+
+    /// The command text of the block whose header row is at viewport
+    /// `row` (the row as painted by the last snapshot). Reads the echo
+    /// cells — from the prompt's end column through the header's last
+    /// row — so it works for any prompt without knowing its shape.
+    pub fn block_command_at_row(&self, row: usize) -> Option<String> {
+        if !self.blocks_enabled || self.is_alt_screen() {
+            return None;
+        }
+        let history = self.term.grid().history_size();
+        let offset = self.display_offset() + self.view_bump;
+        let abs = self.tracker.abs(history, row as i32 - offset as i32);
+        let span = self
+            .tracker
+            .spans()
+            .find(|s| !s.at_prompt() && s.prompt_start <= abs && abs < s.header_end())?;
+        let (echo_row, echo_col) = span.prompt_end?;
+        let mut text = String::new();
+        for r in echo_row..span.header_end() {
+            let line = self.tracker.line(history, r);
+            let grid_row = &self.term.grid()[Line(line as i32)];
+            let from = if r == echo_row { echo_col } else { 0 };
+            for col in from..self.cols {
+                let ch = grid_row[Column(col)].c;
+                if ch != '\0' {
+                    text.push(ch);
+                }
+            }
+        }
+        let text = text.trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// Scroll so the previous (`-1`) / next (`+1`) block header sits at
+    /// the top of the viewport. Returns false when there is none.
+    pub fn scroll_to_block(&mut self, step: i32) -> bool {
+        if !self.blocks_enabled || self.is_alt_screen() {
+            return false;
+        }
+        let history = self.term.grid().history_size();
+        let offset = self.display_offset() as i64;
+        // Absolute row currently at the top of the viewport.
+        let top = self.tracker.abs(history, -(offset as i32));
+        let target = if step < 0 {
+            // Nearest header above the viewport top. Headers already in
+            // view can't be brought to the top (the viewport can't
+            // scroll below the tail), so they're not "previous".
+            self.tracker
+                .spans()
+                .filter(|s| !s.at_prompt() && s.prompt_start < top)
+                .map(|s| s.prompt_start)
+                .max()
+        } else {
+            self.tracker
+                .spans()
+                .filter(|s| !s.at_prompt() && s.prompt_start > top)
+                .map(|s| s.prompt_start)
+                .min()
+        };
+        let Some(target) = target else { return false };
+        let line = self.tracker.line(history, target);
+        // offset that puts `line` at viewport row 0: row = line + offset.
+        let want = (-line).clamp(0, history as i64);
+        self.term
+            .scroll_display(Scroll::Delta((want - offset) as i32));
+        true
+    }
+
     pub fn search_active(&self) -> bool {
         self.search.is_some()
     }
@@ -1724,6 +1793,50 @@ mod tests {
         assert_eq!(TerminalState::grid_row_text(&grid, 1), "run2 1");
         assert_eq!(grid.cursor, Some((0, 1)));
         assert_eq!(TerminalState::grid_row_text(&grid, 2), "");
+    }
+
+    // ---- block navigation ----
+
+    #[test]
+    fn block_command_at_row_reads_the_echo_and_scroll_to_block_steps() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "~ >", "echo one", &["one"], 0);
+        for i in 0..30 {
+            state.process_bytes(format!("filler {i}\r\n").as_bytes());
+        }
+        // Wait — filler here is inside no span; give it a real cycle.
+        cycle(&mut state, "~ >", "ls -la /tmp", &["a", "b"], 0);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+
+        // At the tail: the `ls -la /tmp` header is visible; find its row.
+        let grid = state.grid_snapshot();
+        let header_row = (0..grid.rows)
+            .find(|&r| TerminalState::grid_row_text(&grid, r) == "~ >ls -la /tmp")
+            .expect("ls header visible");
+        assert_eq!(
+            state.block_command_at_row(header_row).as_deref(),
+            Some("ls -la /tmp")
+        );
+        assert_eq!(
+            state.block_command_at_row(header_row + 1),
+            None,
+            "output row"
+        );
+
+        // Previous block: the `ls` header is on the live screen (can't
+        // be scrolled to the top), so the first hop is `echo one`.
+        assert!(state.scroll_to_block(-1), "there is a previous block");
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >echo one");
+        assert!(!state.scroll_to_block(-1), "no block above the first");
+        // Next: the `ls` header lives on the live screen, so the closest
+        // the viewport can get is the tail (offset 0) with it visible.
+        assert!(state.scroll_to_block(1));
+        assert_eq!(state.display_offset(), 0);
+        let grid = state.grid_snapshot();
+        assert!((0..grid.rows).any(|r| TerminalState::grid_row_text(&grid, r) == "~ >ls -la /tmp"));
     }
 
     // ---- search (F14) ----

@@ -274,9 +274,14 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::ArrowUp) => {
-                // Cmd+Up scrolls the output; plain Up is editor/history.
+                // Cmd+Shift+Up jumps to the previous block; Cmd+Up
+                // scrolls a line; plain Up is editor/history.
                 if self.modifiers.super_key() {
-                    self.scroll_terminal(1);
+                    if self.modifiers.shift_key() {
+                        self.jump_block(-1);
+                    } else {
+                        self.scroll_terminal(1);
+                    }
                     return;
                 }
                 let on_first_line = self.input.cursor_line() == 0;
@@ -291,7 +296,11 @@ impl App {
             }
             Key::Named(NamedKey::ArrowDown) => {
                 if self.modifiers.super_key() {
-                    self.scroll_terminal(-1);
+                    if self.modifiers.shift_key() {
+                        self.jump_block(1);
+                    } else {
+                        self.scroll_terminal(-1);
+                    }
                     return;
                 }
                 let on_last_line = self.input.cursor_line() == self.input.line_count() - 1;
