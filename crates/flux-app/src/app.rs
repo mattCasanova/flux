@@ -14,6 +14,7 @@ mod layout;
 mod mouse;
 mod popup;
 mod scroll;
+mod tabs;
 mod terminal_events;
 
 use std::sync::Arc;
@@ -68,9 +69,9 @@ pub struct App {
     /// Fractional scroll remainder from trackpad pixel deltas — whole
     /// lines are consumed per wheel event, the rest accumulates here.
     pub(crate) scroll_accum: f32,
-    /// Set when the shell process exits (PTY EOF) — the event loop
-    /// shuts the app down on the next wake. "exit closes the window,"
-    /// like every terminal.
+    /// Set when the last tab's shell exits (PTY EOF) — the event loop
+    /// shuts the app down on the next wake. A shell exiting in one of
+    /// several tabs just closes that tab.
     pub(crate) shell_exited: bool,
     /// Click/drag tracking for mouse selection (F12). The selection
     /// itself lives in `TerminalState` (content-anchored, survives

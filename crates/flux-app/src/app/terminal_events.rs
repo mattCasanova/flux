@@ -12,51 +12,62 @@ use flux_terminal::state::TermEvent;
 use super::App;
 
 impl App {
-    /// Process pending PTY output through alacritty_terminal.
+    /// Process pending PTY output through alacritty_terminal — for
+    /// EVERY pane, not just the focused one, so a build running in a
+    /// background tab keeps flowing (and its channel doesn't grow
+    /// without bound). Only the focused pane triggers a repaint.
     pub(super) fn process_pty_output(&mut self) {
-        let Some(pane) = self.mux.focused_pane_mut() else {
-            return;
-        };
+        let mut focused_dirty = false;
+        let mut any_title = false;
+        let mut exited_panes: Vec<u64> = Vec::new();
+        let focused_id = self.mux.focused_pane().map(|pane| pane.id);
 
-        let mut dirty = false;
-        let mut exited = false;
-
-        for event in pane.pty.read_events() {
-            match event {
-                PtyEvent::Output(bytes) => {
-                    pane.terminal.process_bytes(&bytes);
-                    dirty = true;
-                }
-                PtyEvent::Exited => {
-                    exited = true;
+        for tab in &mut self.mux.tabs {
+            let pane = &mut tab.pane;
+            let mut dirty = false;
+            for event in pane.pty.read_events() {
+                match event {
+                    PtyEvent::Output(bytes) => {
+                        pane.terminal.process_bytes(&bytes);
+                        dirty = true;
+                    }
+                    PtyEvent::Exited => {
+                        exited_panes.push(pane.id);
+                    }
                 }
             }
-        }
-        if exited {
-            self.shell_exited = true;
-        }
-
-        // Handle events from alacritty_terminal (PtyWrite responses)
-        if dirty {
-            let Some(pane) = self.mux.focused_pane_mut() else {
-                return;
-            };
+            if !dirty {
+                continue;
+            }
+            if Some(pane.id) == focused_id {
+                focused_dirty = true;
+            }
             for event in pane.terminal.drain_events() {
                 match event {
                     TermEvent::PtyWrite(text) => {
                         let _ = pane.pty.write(text.as_bytes());
                     }
                     TermEvent::Title(title) => {
-                        if let Some(window) = &self.window {
-                            window.set_title(&title);
-                        }
+                        tab.title = Some(title);
+                        any_title = true;
                     }
                     TermEvent::Bell => {
                         log::debug!("Bell");
                     }
                 }
             }
+        }
 
+        for pane_id in exited_panes {
+            self.close_tab_with_pane(pane_id);
+        }
+
+        if any_title {
+            self.apply_focused_title();
+            self.update_tab_bar();
+        }
+
+        if focused_dirty {
             // Raw-mode state can change on any PTY output (vim enters alt
             // screen on launch, fzf flips termios, etc.). Re-check before
             // rendering the next frame.
@@ -81,7 +92,7 @@ impl App {
     /// as the shell prints its first prompt. Password prompts and other
     /// termios-only raw-mode programs that skip alt-screen are a follow-up
     /// (tracked separately).
-    fn sync_raw_mode(&mut self) {
+    pub(super) fn sync_raw_mode(&mut self) {
         let Some(terminal) = self.terminal() else {
             return;
         };

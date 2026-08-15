@@ -29,7 +29,7 @@ impl Renderer {
 
             for pos in sel.cells(grid_cols) {
                 let x = self.padding_x + pos.col as f32 * cell_w;
-                let y = self.padding_y + pos.row as f32 * cell_h + y_shift;
+                let y = self.padding_y + self.content_top + pos.row as f32 * cell_h + y_shift;
                 instances.push(CellInstance {
                     position: [x, y],
                     size: [cell_w, cell_h],

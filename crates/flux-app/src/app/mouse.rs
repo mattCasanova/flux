@@ -340,7 +340,8 @@ impl App {
             .map(|w| w.scale_factor())
             .unwrap_or(1.0);
         let pad_x = self.config.window.padding_horizontal as f64 * scale;
-        let pad_y = self.config.window.padding_vertical as f64 * scale;
+        let pad_y =
+            self.config.window.padding_vertical as f64 * scale + renderer.content_top() as f64;
 
         let x = pos.x - pad_x;
         let y = pos.y - pad_y;
@@ -366,14 +367,19 @@ impl App {
     /// drag past the boundary keeps extending the selection. Also
     /// reports which half of the cell the pointer is in.
     fn pixel_to_cell_clamped(&self, pos: PhysicalPosition<f64>) -> (CellPos, bool) {
-        let (cell_w, cell_h, y_shift_rows) = self
+        let (cell_w, cell_h, y_shift_rows, content_top) = self
             .renderer
             .as_ref()
             .map(|r| {
                 let m = r.cell_metrics();
-                (m.width as f64, m.height as f64, r.current_y_shift_rows())
+                (
+                    m.width as f64,
+                    m.height as f64,
+                    r.current_y_shift_rows(),
+                    r.content_top() as f64,
+                )
             })
-            .unwrap_or((8.0, 16.0, 0));
+            .unwrap_or((8.0, 16.0, 0, 0.0));
         let (cols, rows) = self
             .terminal()
             .map(|t| (t.cols(), t.rows()))
@@ -384,7 +390,7 @@ impl App {
             .map(|w| w.scale_factor())
             .unwrap_or(1.0);
         let pad_x = self.config.window.padding_horizontal as f64 * scale;
-        let pad_y = self.config.window.padding_vertical as f64 * scale;
+        let pad_y = self.config.window.padding_vertical as f64 * scale + content_top;
 
         let x = (pos.x - pad_x).max(0.0);
         let y = (pos.y - pad_y).max(0.0);

@@ -80,6 +80,14 @@ pub struct Renderer {
     /// Scrollbar track + thumb while the viewport is scrolled into
     /// history — rebuilt on `set_grid`, drawn over the selection tint.
     pub(crate) scrollbar_instances: Vec<CellInstance>,
+    /// Tab bar across the top (only with 2+ tabs) — rebuilt by
+    /// `set_tab_bar`, drawn with the input chrome.
+    pub(crate) tab_instances: Vec<CellInstance>,
+    /// Pixels the terminal content area is pushed down from the top
+    /// padding — the tab bar's height when it's visible. Applied by
+    /// output/selection/scrollbar rendering; the app adds the same
+    /// offset in pixel→cell mapping.
+    pub(crate) content_top: f32,
     /// Bottom-anchor shift of the last `set_grid`, in rows. Cached so
     /// selection rendering and the app's pixel→cell mapping agree with
     /// what's actually on screen.
@@ -163,6 +171,8 @@ impl Renderer {
             popup_instances: Vec::new(),
             selection_instances: Vec::new(),
             scrollbar_instances: Vec::new(),
+            tab_instances: Vec::new(),
+            content_top: 0.0,
             current_y_shift_rows: 0,
             alt_bg_policy: AltBgPolicy::Sync,
             scrolled_bg: None,
@@ -178,6 +188,15 @@ impl Renderer {
     }
 
     /// Set the horizontal and vertical padding between the window edge and the grid.
+    /// Push the content area down by `pixels` (the tab bar height).
+    pub fn set_content_top(&mut self, pixels: f32) {
+        self.content_top = pixels;
+    }
+
+    pub fn content_top(&self) -> f32 {
+        self.content_top
+    }
+
     pub fn set_padding(&mut self, horizontal: f32, vertical: f32) {
         self.padding_x = horizontal;
         self.padding_y = vertical;

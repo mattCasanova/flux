@@ -46,6 +46,7 @@ impl Renderer {
             &self.selection_instances,
             &self.scrollbar_instances,
             &self.input_instances,
+            &self.tab_instances,
             &self.popup_instances,
         ];
         let total: usize = slices.iter().map(|s| s.len()).sum();
@@ -67,6 +68,7 @@ impl Renderer {
             &self.selection_instances,
             &self.scrollbar_instances,
             &self.input_instances,
+            &self.tab_instances,
             &self.popup_instances,
         ] {
             if !slice.is_empty() {

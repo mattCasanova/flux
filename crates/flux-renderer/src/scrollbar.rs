@@ -28,7 +28,7 @@ impl Renderer {
             let pad_x = self.padding_x;
             let pad_y = self.padding_y;
 
-            let area_y = pad_y;
+            let area_y = pad_y + self.content_top;
             let area_h = grid.rows as f32 * cell_h;
 
             // Sit centered in the right padding when there is room,

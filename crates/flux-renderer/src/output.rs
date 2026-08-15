@@ -121,7 +121,7 @@ impl Renderer {
         let cell_h = self.atlas.cell_height;
         let baseline = self.atlas.baseline_offset;
         let pad_x = self.padding_x;
-        let pad_y = self.padding_y;
+        let pad_y = self.padding_y + self.content_top;
 
         let y_shift_rows = if self.bottom_anchor {
             let anchor_row = grid

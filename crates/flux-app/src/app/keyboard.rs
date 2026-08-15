@@ -22,6 +22,12 @@ impl App {
             return;
         }
 
+        // Tab shortcuts run in every mode — vim in one tab must not
+        // stop Cmd+T/W or tab switching (iTerm behavior).
+        if self.handle_tab_shortcut(&event) {
+            return;
+        }
+
         // Popup intercept — exhaustive match, no wildcard.
         match &self.popup {
             PopupState::Hidden => {}
@@ -57,6 +63,42 @@ impl App {
     /// at all — the Flux editor owns the keyboard.
     fn pty_owns_keyboard(&self) -> bool {
         self.raw_mode || self.terminal().map(|t| t.is_executing()).unwrap_or(false)
+    }
+
+    /// Cmd+T / Cmd+W / Cmd+1-9 / Cmd+[ / Cmd+] — returns true when the
+    /// key was a tab shortcut and was consumed.
+    fn handle_tab_shortcut(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::Key;
+        if !self.modifiers.super_key() {
+            return false;
+        }
+        let Key::Character(text) = &event.logical_key else {
+            return false;
+        };
+        match text.as_str() {
+            "t" => {
+                self.new_tab();
+                true
+            }
+            "w" => {
+                self.close_current_tab();
+                true
+            }
+            "[" => {
+                self.cycle_tab(-1);
+                true
+            }
+            "]" => {
+                self.cycle_tab(1);
+                true
+            }
+            digit @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
+                let index = digit.as_bytes()[0] as usize - b'1' as usize;
+                self.select_tab(index);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Handle a key while the autocomplete popup is active. Returns

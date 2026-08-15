@@ -24,8 +24,12 @@ impl App {
         let metrics = renderer.cell_metrics();
         let pad_x = padding_x(&self.config, window);
         let pad_y = padding_y(&self.config, window);
+        // The tab bar (2+ tabs) takes one row off the top, in raw mode
+        // too — vim in one tab shouldn't hide the others.
+        let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
+        renderer.set_content_top(bar_h);
         let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - bar_h).max(0.0);
         let cols = (usable_w / metrics.width) as usize;
         let total_rows = (usable_h / metrics.height) as usize;
         // 1 divider row + N input lines (dynamic based on editor content).
@@ -37,6 +41,10 @@ impl App {
             pane.terminal.resize(cols.max(1), rows);
             let _ = pane.pty.resize(cols.max(1) as u16, rows as u16);
         }
+
+        // The bar's background rect spans the window — rebuild it so a
+        // resize doesn't leave it at the old width.
+        self.update_tab_bar();
     }
 
     pub(super) fn handle_resize(&mut self, width: u32, height: u32) {

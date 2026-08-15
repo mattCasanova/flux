@@ -25,9 +25,12 @@ pub struct Pane {
 
 /// A workspace with its own pane. Splits (v0.4) turn this into a tree.
 pub struct Tab {
-    #[allow(dead_code)] // stable identity for the tab bar (Sprint 2 UI)
+    #[allow(dead_code)] // stable identity once tabs are reorderable
     pub id: u64,
     pub pane: Pane,
+    /// Last title the shell set via OSC 0/2 — shown in the tab bar and
+    /// applied to the window when the tab is focused.
+    pub title: Option<String>,
 }
 
 /// All tabs, the focus, and the domains panes can spawn in.
@@ -82,6 +85,7 @@ impl MuxState {
         let tab = Tab {
             id: self.next_tab_id,
             pane,
+            title: None,
         };
         self.next_tab_id += 1;
         self.tabs.push(tab);
@@ -95,6 +99,46 @@ impl MuxState {
 
     pub fn focused_pane_mut(&mut self) -> Option<&mut Pane> {
         self.tabs.get_mut(self.current_tab).map(|tab| &mut tab.pane)
+    }
+
+    pub fn focused_tab(&self) -> Option<&Tab> {
+        self.tabs.get(self.current_tab)
+    }
+
+    /// Focus tab `index` (0-based). Out of range is a no-op. Returns
+    /// true if the focus changed.
+    pub fn select_tab(&mut self, index: usize) -> bool {
+        if index < self.tabs.len() && index != self.current_tab {
+            self.current_tab = index;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Focus the next/previous tab, wrapping. `step` is +1 or -1.
+    pub fn cycle_tab(&mut self, step: i32) -> bool {
+        let n = self.tabs.len();
+        if n < 2 {
+            return false;
+        }
+        self.current_tab = (self.current_tab as i32 + step).rem_euclid(n as i32) as usize;
+        true
+    }
+
+    /// Remove tab `index`. Focus moves to the tab that took its slot
+    /// (or the new last tab). Returns true when no tabs remain.
+    pub fn close_tab(&mut self, index: usize) -> bool {
+        if index < self.tabs.len() {
+            self.tabs.remove(index);
+            match index.cmp(&self.current_tab) {
+                std::cmp::Ordering::Less => self.current_tab -= 1,
+                _ => {
+                    self.current_tab = self.current_tab.min(self.tabs.len().saturating_sub(1));
+                }
+            }
+        }
+        self.tabs.is_empty()
     }
 }
 
@@ -179,6 +223,51 @@ mod tests {
         assert_eq!(mux.current_tab, 1);
         assert_ne!(mux.tabs[0].pane.id, mux.tabs[1].pane.id);
         assert_ne!(mux.tabs[0].id, mux.tabs[1].id);
+    }
+
+    fn mux_with_tabs(n: usize) -> MuxState {
+        let mut mux = MuxState::new();
+        mux.add_domain(Box::new(FakeDomain {
+            id: 0,
+            spawned: Arc::new(AtomicU16::new(0)),
+        }));
+        for _ in 0..n {
+            mux.create_tab(0, 80, 24, Box::new(|| {}), term()).unwrap();
+        }
+        mux
+    }
+
+    #[test]
+    fn select_and_cycle_wrap_and_ignore_out_of_range() {
+        let mut mux = mux_with_tabs(3);
+        assert_eq!(mux.current_tab, 2, "newest tab focused");
+        assert!(mux.select_tab(0));
+        assert!(!mux.select_tab(0), "already focused");
+        assert!(!mux.select_tab(9), "out of range is a no-op");
+        assert_eq!(mux.current_tab, 0);
+        assert!(mux.cycle_tab(-1));
+        assert_eq!(mux.current_tab, 2, "wraps backward");
+        assert!(mux.cycle_tab(1));
+        assert_eq!(mux.current_tab, 0, "wraps forward");
+        let mut single = mux_with_tabs(1);
+        assert!(!single.cycle_tab(1), "single tab has nothing to cycle");
+    }
+
+    #[test]
+    fn close_tab_keeps_focus_sensible() {
+        let mut mux = mux_with_tabs(3);
+        mux.select_tab(1);
+        // Closing a tab before the focused one shifts the index.
+        assert!(!mux.close_tab(0));
+        assert_eq!(mux.current_tab, 0);
+        assert_eq!(mux.tabs.len(), 2);
+        // Closing the focused last tab moves focus to the new last.
+        mux.select_tab(1);
+        assert!(!mux.close_tab(1));
+        assert_eq!(mux.current_tab, 0);
+        // Closing the final tab reports empty.
+        assert!(mux.close_tab(0));
+        assert!(mux.focused_pane().is_none());
     }
 
     #[test]
