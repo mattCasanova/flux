@@ -48,7 +48,7 @@ impl App {
     /// from the terminal's content-anchored selection, so it can span
     /// scrollback well beyond the visible screen.
     pub(super) fn handle_copy(&mut self) -> bool {
-        let Some(text) = self.terminal.as_ref().and_then(|t| t.selection_text()) else {
+        let Some(text) = self.terminal().and_then(|t| t.selection_text()) else {
             return false;
         };
         self.set_clipboard_text(text);
@@ -83,19 +83,14 @@ impl App {
             _ => return,
         };
 
-        let pty_owns = self.raw_mode
-            || self
-                .terminal
-                .as_ref()
-                .map(|t| t.is_executing())
-                .unwrap_or(false);
+        let pty_owns = self.raw_mode || self.terminal().map(|t| t.is_executing()).unwrap_or(false);
         if pty_owns {
             let bracketed = self
-                .terminal
-                .as_ref()
+                .terminal()
                 .map(|t| t.is_bracketed_paste())
                 .unwrap_or(false);
-            if let Some(pty) = &mut self.pty {
+            if let Some(pane) = self.pane_mut() {
+                let pty = &mut pane.pty;
                 if bracketed {
                     let _ = pty.write(b"\x1b[200~");
                 }

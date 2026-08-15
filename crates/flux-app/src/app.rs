@@ -26,10 +26,10 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use flux_input::{Autocomplete, InputEditor};
-use flux_terminal::pty::PtyManager;
 use flux_terminal::state::TerminalState;
 
 use crate::config::FluxConfig;
+use crate::mux::{MuxState, Pane};
 
 pub(crate) use popup::PopupState;
 
@@ -42,8 +42,9 @@ pub struct App {
     pub(crate) proxy: winit::event_loop::EventLoopProxy<()>,
     pub(crate) window: Option<Arc<Window>>,
     pub(crate) renderer: Option<flux_renderer::Renderer>,
-    pub(crate) pty: Option<PtyManager>,
-    pub(crate) terminal: Option<TerminalState>,
+    /// Tabs and panes (#40). One tab, one pane today; every keystroke,
+    /// PTY read, and render goes through the focused pane.
+    pub(crate) mux: MuxState,
     pub(crate) input: InputEditor,
     /// True when a full-screen program (vim, less, fzf) owns the keyboard.
     /// When set, keystrokes route directly to the PTY and Flux's input
@@ -78,6 +79,17 @@ pub struct App {
 }
 
 impl App {
+    /// The focused pane's terminal, if any pane exists yet.
+    pub(crate) fn terminal(&self) -> Option<&TerminalState> {
+        self.mux.focused_pane().map(|pane| &pane.terminal)
+    }
+
+    /// The focused pane (PTY + terminal together — one borrow, so
+    /// callers can use both sides without fighting the borrow checker).
+    pub(crate) fn pane_mut(&mut self) -> Option<&mut Pane> {
+        self.mux.focused_pane_mut()
+    }
+
     pub fn new(
         config: FluxConfig,
         proxy: winit::event_loop::EventLoopProxy<()>,
@@ -88,8 +100,7 @@ impl App {
             proxy,
             window: None,
             renderer: None,
-            pty: None,
-            terminal: None,
+            mux: MuxState::new(),
             input,
             raw_mode: false,
             modifiers: ModifiersState::empty(),

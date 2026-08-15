@@ -14,33 +14,37 @@ use super::App;
 impl App {
     /// Process pending PTY output through alacritty_terminal.
     pub(super) fn process_pty_output(&mut self) {
-        let Some(pty) = &self.pty else { return };
-        let Some(terminal) = &mut self.terminal else {
+        let Some(pane) = self.mux.focused_pane_mut() else {
             return;
         };
 
         let mut dirty = false;
+        let mut exited = false;
 
-        for event in pty.read_events() {
+        for event in pane.pty.read_events() {
             match event {
                 PtyEvent::Output(bytes) => {
-                    terminal.process_bytes(&bytes);
+                    pane.terminal.process_bytes(&bytes);
                     dirty = true;
                 }
                 PtyEvent::Exited => {
-                    self.shell_exited = true;
+                    exited = true;
                 }
             }
+        }
+        if exited {
+            self.shell_exited = true;
         }
 
         // Handle events from alacritty_terminal (PtyWrite responses)
         if dirty {
-            for event in terminal.drain_events() {
+            let Some(pane) = self.mux.focused_pane_mut() else {
+                return;
+            };
+            for event in pane.terminal.drain_events() {
                 match event {
                     TermEvent::PtyWrite(text) => {
-                        if let Some(pty) = &mut self.pty {
-                            let _ = pty.write(text.as_bytes());
-                        }
+                        let _ = pane.pty.write(text.as_bytes());
                     }
                     TermEvent::Title(title) => {
                         if let Some(window) = &self.window {
@@ -78,7 +82,7 @@ impl App {
     /// termios-only raw-mode programs that skip alt-screen are a follow-up
     /// (tracked separately).
     fn sync_raw_mode(&mut self) {
-        let Some(terminal) = &self.terminal else {
+        let Some(terminal) = self.terminal() else {
             return;
         };
         let raw = terminal.is_alt_screen();

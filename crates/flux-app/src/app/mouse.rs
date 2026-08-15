@@ -102,8 +102,7 @@ impl App {
         // program while the left button is held, if it asked for them.
         if self.mouse.forwarding_drag {
             let reports_drag = self
-                .terminal
-                .as_ref()
+                .terminal()
                 .map(|t| t.reports_mouse_drag())
                 .unwrap_or(false);
             if reports_drag
@@ -124,8 +123,7 @@ impl App {
             && self.raw_mode
             && !self.modifiers.shift_key()
             && self
-                .terminal
-                .as_ref()
+                .terminal()
                 .map(|t| t.reports_mouse_motion())
                 .unwrap_or(false)
         {
@@ -147,7 +145,8 @@ impl App {
         // keeps scrolling while the pointer rests at the edge).
         self.mouse.autoscroll = self.autoscroll_demand(pos);
         let (cell, right_side) = self.pixel_to_cell_clamped(pos);
-        if let Some(term) = &mut self.terminal {
+        if let Some(pane) = self.pane_mut() {
+            let term = &mut pane.terminal;
             term.update_selection(cell.col, cell.row, right_side);
         }
         self.update_display();
@@ -169,8 +168,7 @@ impl App {
         let program_owns_mouse = self.raw_mode
             && !self.modifiers.shift_key()
             && self
-                .terminal
-                .as_ref()
+                .terminal()
                 .map(|t| t.wants_mouse_reporting())
                 .unwrap_or(false);
         if program_owns_mouse {
@@ -252,8 +250,10 @@ impl App {
             base_mode
         };
 
-        if let Some(term) = &mut self.terminal {
-            if self.modifiers.shift_key() && term.has_selection() {
+        let shift = self.modifiers.shift_key();
+        if let Some(pane) = self.pane_mut() {
+            let term = &mut pane.terminal;
+            if shift && term.has_selection() {
                 term.update_selection(cell.col, cell.row, right_side);
             } else {
                 term.start_selection(mode, cell.col, cell.row, right_side);
@@ -270,7 +270,7 @@ impl App {
         let Some(renderer) = self.renderer.as_ref() else {
             return 0;
         };
-        let Some(term) = self.terminal.as_ref() else {
+        let Some(term) = self.terminal() else {
             return 0;
         };
         let cell_h = renderer.cell_metrics().height as f64;
@@ -315,7 +315,8 @@ impl App {
 
         let lines = self.mouse.autoscroll;
         let (cell, right_side) = self.pixel_to_cell_clamped(self.mouse.last_cursor_pos);
-        if let Some(term) = &mut self.terminal {
+        if let Some(pane) = self.pane_mut() {
+            let term = &mut pane.terminal;
             term.scroll_lines(lines);
             // Re-pin the head to the edge cell — the content moved
             // beneath the pointer, extending the selection.
@@ -330,7 +331,7 @@ impl App {
     /// space above the output, or the input bar below it).
     pub(super) fn pixel_to_cell(&self, pos: PhysicalPosition<f64>) -> Option<CellPos> {
         let renderer = self.renderer.as_ref()?;
-        let term = self.terminal.as_ref()?;
+        let term = self.terminal()?;
         let metrics = renderer.cell_metrics();
 
         let scale = self
@@ -374,8 +375,7 @@ impl App {
             })
             .unwrap_or((8.0, 16.0, 0));
         let (cols, rows) = self
-            .terminal
-            .as_ref()
+            .terminal()
             .map(|t| (t.cols(), t.rows()))
             .unwrap_or((1, 1));
         let scale = self
@@ -404,31 +404,24 @@ impl App {
     /// Encode one mouse event in the program's requested protocol and
     /// write it to the PTY.
     pub(super) fn forward_mouse(&mut self, button: u8, cell: CellPos, pressed: bool) {
-        let sgr = self
-            .terminal
-            .as_ref()
-            .map(|t| t.sgr_mouse())
-            .unwrap_or(false);
+        let sgr = self.terminal().map(|t| t.sgr_mouse()).unwrap_or(false);
         let bytes = if sgr {
             Some(encode_sgr(button, cell, pressed))
         } else {
             encode_legacy(button, cell, pressed)
         };
         if let Some(bytes) = bytes
-            && let Some(pty) = &mut self.pty
+            && let Some(pane) = self.pane_mut()
         {
-            let _ = pty.write(&bytes);
+            let _ = pane.pty.write(&bytes);
         }
     }
 
     pub(super) fn clear_selection(&mut self) {
-        let had = self
-            .terminal
-            .as_ref()
-            .map(|t| t.has_selection())
-            .unwrap_or(false);
+        let had = self.terminal().map(|t| t.has_selection()).unwrap_or(false);
         if had {
-            if let Some(term) = &mut self.terminal {
+            if let Some(pane) = self.pane_mut() {
+                let term = &mut pane.terminal;
                 term.clear_terminal_selection();
             }
             self.update_display();

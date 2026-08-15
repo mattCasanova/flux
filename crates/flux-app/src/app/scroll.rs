@@ -42,7 +42,7 @@ impl App {
             // protocol; otherwise translate the wheel into arrow keys
             // (DECSET 1007 alternate-scroll) so vim / less scroll
             // their own content.
-            let (wants_mouse, alt_scroll, app_cursor) = match &self.terminal {
+            let (wants_mouse, alt_scroll, app_cursor) = match self.terminal() {
                 Some(t) => (
                     t.wants_mouse_reporting(),
                     t.alternate_scroll(),
@@ -76,7 +76,8 @@ impl App {
                 (false, true) => b"\x1b[A",
                 (false, false) => b"\x1b[B",
             };
-            if let Some(pty) = &mut self.pty {
+            if let Some(pane) = self.pane_mut() {
+                let pty = &mut pane.pty;
                 for _ in 0..n.unsigned_abs() {
                     let _ = pty.write(seq);
                 }
@@ -91,22 +92,22 @@ impl App {
     /// and refresh the grid. Selections survive: they're anchored to
     /// content, not viewport rows.
     pub(super) fn scroll_terminal(&mut self, lines: i32) {
-        let Some(term) = &mut self.terminal else {
+        let Some(pane) = self.pane_mut() else {
             return;
         };
-        term.scroll_lines(lines);
+        pane.terminal.scroll_lines(lines);
         self.update_display();
         self.request_redraw();
     }
 
     pub(super) fn scroll_page(&mut self, up: bool) {
-        let Some(term) = &mut self.terminal else {
+        let Some(pane) = self.pane_mut() else {
             return;
         };
         if up {
-            term.scroll_page_up();
+            pane.terminal.scroll_page_up();
         } else {
-            term.scroll_page_down();
+            pane.terminal.scroll_page_down();
         }
         self.update_display();
         self.request_redraw();
@@ -116,11 +117,11 @@ impl App {
     /// command while scrolled up — the standard "typing returns you to
     /// the present" behavior.
     pub(super) fn snap_to_bottom(&mut self) {
-        let Some(term) = &mut self.terminal else {
+        let Some(pane) = self.pane_mut() else {
             return;
         };
-        if term.display_offset() > 0 {
-            term.scroll_to_bottom();
+        if pane.terminal.display_offset() > 0 {
+            pane.terminal.scroll_to_bottom();
             self.update_display();
         }
     }

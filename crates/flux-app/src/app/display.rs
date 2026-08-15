@@ -8,14 +8,13 @@ use super::{App, PopupState};
 impl App {
     /// Render the terminal grid.
     pub(super) fn update_display(&mut self) {
-        let Some(terminal) = &mut self.terminal else {
+        let Some(pane) = self.mux.focused_pane_mut() else {
             return;
         };
+        let grid = pane.terminal.grid_snapshot();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-
-        let grid = terminal.grid_snapshot();
         renderer.set_grid(&grid);
     }
 

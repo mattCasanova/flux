@@ -5,6 +5,7 @@
 mod app;
 mod config;
 mod logging;
+mod mux;
 mod platform;
 
 use anyhow::Result;

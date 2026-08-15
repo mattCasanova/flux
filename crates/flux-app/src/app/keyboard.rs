@@ -56,12 +56,7 @@ impl App {
     /// shell prompt — integration phase Prompt/Input, or no integration
     /// at all — the Flux editor owns the keyboard.
     fn pty_owns_keyboard(&self) -> bool {
-        self.raw_mode
-            || self
-                .terminal
-                .as_ref()
-                .map(|t| t.is_executing())
-                .unwrap_or(false)
+        self.raw_mode || self.terminal().map(|t| t.is_executing()).unwrap_or(false)
     }
 
     /// Handle a key while the autocomplete popup is active. Returns
@@ -148,11 +143,11 @@ impl App {
                     // then accepts it in a single parse.
                     let wrap = line.contains('\n')
                         && self
-                            .terminal
-                            .as_ref()
+                            .terminal()
                             .map(|t| t.is_bracketed_paste())
                             .unwrap_or(false);
-                    if let Some(pty) = &mut self.pty {
+                    if let Some(pane) = self.pane_mut() {
+                        let pty = &mut pane.pty;
                         if wrap {
                             let _ = pty.write(b"\x1b[200~");
                             let _ = pty.write(line.as_bytes());
@@ -259,12 +254,7 @@ impl App {
                     self.request_redraw();
                     return;
                 }
-                if self
-                    .terminal
-                    .as_ref()
-                    .map(|t| t.has_selection())
-                    .unwrap_or(false)
-                {
+                if self.terminal().map(|t| t.has_selection()).unwrap_or(false) {
                     self.clear_selection();
                     return;
                 }
@@ -296,7 +286,8 @@ impl App {
                 self.input.clear();
                 self.update_input_display();
             }
-            if let Some(pty) = &mut self.pty {
+            if let Some(pane) = self.pane_mut() {
+                let pty = &mut pane.pty;
                 let _ = pty.write(text.as_bytes());
             }
         } else {
@@ -334,8 +325,7 @@ impl App {
             return;
         };
         let Some(cwd) = self
-            .terminal
-            .as_ref()
+            .terminal()
             .and_then(|t| t.cwd())
             .map(|p| p.to_path_buf())
         else {
@@ -393,8 +383,7 @@ impl App {
         // TUIs set it; sending the wrong form breaks arrow handling in
         // stricter programs.
         let app_cursor = self
-            .terminal
-            .as_ref()
+            .terminal()
             .map(|t| t.app_cursor_keys())
             .unwrap_or(false);
 
@@ -418,16 +407,17 @@ impl App {
         };
 
         if let Some(bytes) = bytes {
-            if let Some(pty) = &mut self.pty {
+            if let Some(pane) = self.pane_mut() {
+                let pty = &mut pane.pty;
                 let _ = pty.write(bytes);
             }
         } else if !self.modifiers.super_key()
             && let Some(text) = event.text_with_all_modifiers()
-            && let Some(pty) = &mut self.pty
+            && let Some(pane) = self.pane_mut()
         {
             // Same Cmd-chord guard as cooked mode: Cmd+letter must not
             // leak the letter into vim / Claude / the running command.
-            let _ = pty.write(text.as_bytes());
+            let _ = pane.pty.write(text.as_bytes());
         }
 
         self.request_redraw();

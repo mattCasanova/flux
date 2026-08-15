@@ -33,11 +33,9 @@ impl App {
         let chrome_rows = if self.raw_mode { 0 } else { 1 + input_lines };
         let rows = total_rows.saturating_sub(chrome_rows).max(1);
 
-        if let Some(terminal) = &mut self.terminal {
-            terminal.resize(cols.max(1), rows);
-        }
-        if let Some(pty) = &mut self.pty {
-            let _ = pty.resize(cols.max(1) as u16, rows as u16);
+        if let Some(pane) = self.mux.focused_pane_mut() {
+            pane.terminal.resize(cols.max(1), rows);
+            let _ = pane.pty.resize(cols.max(1) as u16, rows as u16);
         }
     }
 

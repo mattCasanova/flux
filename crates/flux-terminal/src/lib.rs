@@ -5,11 +5,16 @@
 //! renderer to consume.
 
 mod blocks;
+pub mod domain;
+pub mod local_domain;
 pub mod pty;
 mod spans;
 pub mod state;
 #[cfg(test)]
 mod zsh_e2e;
+
+pub use domain::{Domain, DomainId, PaneId, Pty};
+pub use local_domain::LocalDomain;
 
 /// The terminal's input mode — determines where keystrokes go.
 pub enum InputMode {

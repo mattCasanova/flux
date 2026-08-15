@@ -9,7 +9,7 @@ use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-use flux_terminal::pty::PtyManager;
+use flux_terminal::LocalDomain;
 use flux_terminal::state::TerminalState;
 use flux_types::Color;
 
@@ -103,31 +103,34 @@ impl App {
             }
         }
 
+        // The local machine as the first (and, until v0.5, only)
+        // domain; the ZDOTDIR bootstrap env applies to every pane it
+        // spawns, so future tabs get shell integration for free.
+        self.mux.add_domain(Box::new(LocalDomain::new(
+            0,
+            shell.binary().to_path_buf(),
+            extra_env,
+        )));
+
         let proxy = self.proxy.clone();
         let wake = Box::new(move || {
             let _ = proxy.send_event(());
         });
-        let mut pty = PtyManager::spawn(
-            shell.binary().to_str().unwrap_or("/bin/zsh"),
-            cols.max(1) as u16,
-            rows.max(1) as u16,
-            wake,
-            &extra_env,
-        )?;
+        let tab = self
+            .mux
+            .create_tab(0, cols.max(1) as u16, rows.max(1) as u16, wake, terminal)?;
 
         if inject_via_pty && let Some(script) = &script_path {
             // Fallback path (bash/fish): source the script in the new
             // shell. Visible at startup — their invisible bootstraps
             // (--rcfile / vendor_conf.d) are future work.
             let source_cmd = format!("source '{}'\n", script.display());
-            let _ = pty.write(source_cmd.as_bytes());
+            let _ = tab.pane.pty.write(source_cmd.as_bytes());
             log::info!("Shell integration injected: {}", script.display());
         }
 
         log::info!("Renderer + PTY initialized");
         self.renderer = Some(renderer);
-        self.terminal = Some(terminal);
-        self.pty = Some(pty);
         self.window = Some(window);
 
         self.update_display();
