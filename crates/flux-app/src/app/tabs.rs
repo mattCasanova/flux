@@ -77,6 +77,10 @@ impl App {
     /// the tab count does): re-fit the pane to the window, re-sync
     /// raw-mode chrome, window title, tab bar, and both displays.
     pub(super) fn after_tab_switch(&mut self) {
+        // The search bar is per-pane state; don't carry it across.
+        if matches!(self.popup, super::PopupState::Search) {
+            self.close_search();
+        }
         self.apply_window_layout();
         self.sync_raw_mode();
         self.apply_focused_title();

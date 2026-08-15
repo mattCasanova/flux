@@ -7,4 +7,6 @@ pub enum PopupState {
     Hidden,
     /// Autocomplete popup is visible. Data lives in `App.autocomplete`.
     Autocomplete,
+    /// Search bar is open (F14). Data lives in `App.search`.
+    Search,
 }

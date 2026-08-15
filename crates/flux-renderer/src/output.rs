@@ -13,11 +13,26 @@ use flux_types::{CellFlags, Color, TerminalGrid};
 /// background — opaque result, standard source-over.
 fn blend_selection_tint(bg: Color) -> Color {
     const TINT: Color = Color::new(0.478, 0.635, 0.969, 1.0); // #7aa2f7
-    const ALPHA: f32 = 0.30;
+    blend_over(bg, TINT, 0.30)
+}
+
+/// Search highlights: every match gets the yellow tint; the focused
+/// match gets the stronger orange so the eye lands on it.
+fn blend_search_tint(bg: Color, focused: bool) -> Color {
+    const MATCH: Color = Color::new(0.878, 0.686, 0.408, 1.0); // #e0af68
+    const FOCUS: Color = Color::new(1.0, 0.62, 0.39, 1.0); // #ff9e64
+    if focused {
+        blend_over(bg, FOCUS, 0.65)
+    } else {
+        blend_over(bg, MATCH, 0.35)
+    }
+}
+
+fn blend_over(bg: Color, tint: Color, alpha: f32) -> Color {
     Color::new(
-        TINT.r * ALPHA + bg.r * (1.0 - ALPHA),
-        TINT.g * ALPHA + bg.g * (1.0 - ALPHA),
-        TINT.b * ALPHA + bg.b * (1.0 - ALPHA),
+        tint.r * alpha + bg.r * (1.0 - alpha),
+        tint.g * alpha + bg.g * (1.0 - alpha),
+        tint.b * alpha + bg.b * (1.0 - alpha),
         1.0,
     )
 }
@@ -175,6 +190,7 @@ impl Renderer {
         // Uses the full cell height so the cursor matches the line grid
         // uniformly regardless of which glyph sits under it.
         if self.show_shell_cursor
+            && !grid.cursor_hidden
             && let Some((col, row)) = grid.cursor
         {
             let cursor_x = pad_x + col as f32 * cell_w;
@@ -206,13 +222,17 @@ impl Renderer {
                 let cell = grid.get(row, col);
                 let cell_x = pad_x + col as f32 * cell_w;
                 let cell_y = pad_y + row as f32 * cell_h + y_shift;
-                let is_under_cursor = self.show_shell_cursor && grid.cursor == Some((col, row));
+                let is_under_cursor = self.show_shell_cursor
+                    && !grid.cursor_hidden
+                    && grid.cursor == Some((col, row));
 
                 // Selected cells get the selection tint blended over
                 // their background — the flag comes from the terminal's
                 // content-anchored selection, so it's already correct
                 // for scrolled viewports.
-                let cell_bg = if cell.flags.contains(CellFlags::SELECTION) {
+                let cell_bg = if cell.flags.contains(CellFlags::SEARCH_MATCH) {
+                    blend_search_tint(cell.bg, cell.flags.contains(CellFlags::SEARCH_FOCUS))
+                } else if cell.flags.contains(CellFlags::SELECTION) {
                     blend_selection_tint(cell.bg)
                 } else {
                     cell.bg

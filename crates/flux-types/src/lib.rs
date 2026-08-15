@@ -82,6 +82,10 @@ bitflags! {
         const WIDE_CHAR  = 0b0010_0000;
         const DIM        = 0b0100_0000;
         const HIDDEN     = 0b1000_0000;
+        /// Cell is inside a search match.
+        const SEARCH_MATCH = 0b0001_0000_0000;
+        /// Cell is inside the focused (current) search match.
+        const SEARCH_FOCUS = 0b0010_0000_0000;
     }
 }
 
@@ -110,8 +114,13 @@ pub struct TerminalGrid {
     pub cells: Vec<CellData>,
     pub cols: usize,
     pub rows: usize,
-    /// Cursor position (col, row). None if cursor is hidden.
+    /// Cursor position (col, row) — the shell's cursor, or the row the
+    /// renderer should bottom-anchor on when the live prompt is hidden.
+    /// None if off-viewport / nothing to anchor.
     pub cursor: Option<(usize, usize)>,
+    /// True when the program hid its cursor (DECTCEM off) — the
+    /// renderer must not draw a block at `cursor` even in raw mode.
+    pub cursor_hidden: bool,
     /// Scrollback offset in lines. 0 = tailing live output; positive =
     /// the viewport is scrolled that many lines up into history. The
     /// cells above already reflect the offset — this field exists so
@@ -128,6 +137,7 @@ impl TerminalGrid {
         Self {
             cells: vec![CellData::default(); cols * rows],
             cursor: None,
+            cursor_hidden: false,
             cols,
             rows,
             display_offset: 0,

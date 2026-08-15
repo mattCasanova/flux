@@ -110,7 +110,8 @@ impl App {
 
         if let Some(renderer) = &mut self.renderer {
             renderer.set_bottom_anchor(!raw);
-            renderer.set_show_shell_cursor(raw);
+            // Shell-cursor visibility is decided per frame in
+            // `update_display` (alt screen OR executing).
         }
 
         // Recompute the grid dimensions so alt-screen programs get every

@@ -14,6 +14,7 @@ mod layout;
 mod mouse;
 mod popup;
 mod scroll;
+mod search;
 mod tabs;
 mod terminal_events;
 
@@ -63,6 +64,8 @@ pub struct App {
     /// that read this to decide whether to swallow a keystroke.
     pub(crate) popup: PopupState,
     pub(crate) autocomplete: Autocomplete,
+    /// Find-in-scrollback bar state (F14).
+    pub(crate) search: search::SearchBar,
     /// Tracks the input bar's line count so we only recompute layout
     /// when it changes (avoids unnecessary PTY resizes).
     pub(crate) last_input_lines: usize,
@@ -108,6 +111,7 @@ impl App {
             clipboard: None,
             popup: PopupState::Hidden,
             autocomplete: Autocomplete::default(),
+            search: search::SearchBar::default(),
             last_input_lines: 1,
             scroll_accum: 0.0,
             shell_exited: false,

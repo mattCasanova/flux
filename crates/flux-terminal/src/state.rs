@@ -7,9 +7,10 @@ use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::Config as TermConfig;
+use alacritty_terminal::term::search::{Match, RegexSearch};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte;
 use flux_types::{CellData, CellFlags, Color, ResolvedTheme, TerminalGrid};
@@ -123,6 +124,45 @@ impl Dimensions for TermDimensions {
     }
 }
 
+/// Search state — the compiled query and the focused match (grid
+/// coordinates; alacritty keeps them meaningful across scrolling only
+/// while the content exists, so `focused` is re-resolved on demand).
+struct SearchState {
+    regex: RegexSearch,
+    focused: Option<Match>,
+}
+
+/// Escape regex metacharacters so a query is matched literally.
+fn regex_escape(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() + 8);
+    for ch in query.chars() {
+        if matches!(
+            ch,
+            '\\' | '.'
+                | '+'
+                | '*'
+                | '?'
+                | '('
+                | ')'
+                | '|'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '^'
+                | '$'
+                | '#'
+                | '&'
+                | '-'
+                | '~'
+        ) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// What the snapshot should do to the viewport: which live-prompt rows
 /// (grid coordinates, inclusive) to hide, and how far to bump the
 /// display offset to fill blank rows at the top with recent history.
@@ -197,6 +237,8 @@ pub struct TerminalState {
     /// Master switch for the semantic stream (prompt hiding + span
     /// decoration). Off = classic stream.
     blocks_enabled: bool,
+    /// Active search (F14): compiled regex + the focused match.
+    search: Option<SearchState>,
     /// Resolved color palette for named/indexed ANSI colors.
     theme: ResolvedTheme,
     event_rx: mpsc::Receiver<TermEvent>,
@@ -231,6 +273,7 @@ impl TerminalState {
             view_bump: 0,
             view_floor: 0,
             blocks_enabled: true,
+            search: None,
             event_rx: rx,
             cols,
             rows,
@@ -246,6 +289,133 @@ impl TerminalState {
 
     pub fn blocks_enabled(&self) -> bool {
         self.blocks_enabled
+    }
+
+    /// Start or update a search. `query` is matched literally,
+    /// case-insensitively. Returns false when the query is empty or
+    /// cannot compile. The first match at or above the viewport's
+    /// bottom is focused and scrolled into view.
+    pub fn search_set(&mut self, query: &str) -> bool {
+        if query.is_empty() {
+            self.search = None;
+            return false;
+        }
+        let pattern = format!("(?i){}", regex_escape(query));
+        match RegexSearch::new(&pattern) {
+            Ok(regex) => {
+                self.search = Some(SearchState {
+                    regex,
+                    focused: None,
+                });
+                // Search backwards from the bottom of the live screen so
+                // the newest match is focused first (like a pager's `?`).
+                let origin = Point::new(
+                    Line(self.rows as i32 - 1),
+                    Column(self.cols.saturating_sub(1)),
+                );
+                self.search_step_from(origin, Direction::Left);
+                true
+            }
+            Err(e) => {
+                log::warn!("search regex failed to compile: {e}");
+                self.search = None;
+                false
+            }
+        }
+    }
+
+    pub fn search_clear(&mut self) {
+        self.search = None;
+    }
+
+    pub fn search_active(&self) -> bool {
+        self.search.is_some()
+    }
+
+    /// Focus the next match below the current one (wraps).
+    pub fn search_next(&mut self) {
+        let Some(focused) = self.search.as_ref().and_then(|s| s.focused.clone()) else {
+            let origin = Point::new(Line(-(self.term.grid().history_size() as i32)), Column(0));
+            self.search_step_from(origin, Direction::Right);
+            return;
+        };
+        let origin = focused.end().add(&self.term, Boundary::Grid, 1);
+        self.search_step_from(origin, Direction::Right);
+    }
+
+    /// Focus the previous match above the current one (wraps).
+    pub fn search_prev(&mut self) {
+        let Some(focused) = self.search.as_ref().and_then(|s| s.focused.clone()) else {
+            let origin = Point::new(
+                Line(self.rows as i32 - 1),
+                Column(self.cols.saturating_sub(1)),
+            );
+            self.search_step_from(origin, Direction::Left);
+            return;
+        };
+        let origin = focused.start().sub(&self.term, Boundary::Grid, 1);
+        self.search_step_from(origin, Direction::Left);
+    }
+
+    fn search_step_from(&mut self, origin: Point, direction: Direction) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let side = match direction {
+            Direction::Right => Side::Left,
+            Direction::Left => Side::Right,
+        };
+        let found = self
+            .term
+            .search_next(&mut search.regex, origin, direction, side, None);
+        search.focused = found.clone();
+        if let Some(m) = found {
+            self.scroll_line_into_view(m.start().line.0);
+        }
+    }
+
+    /// Scroll so grid `line` sits inside the viewport (centered when it
+    /// was outside). No-op if already visible.
+    fn scroll_line_into_view(&mut self, line: i32) {
+        let offset = self.display_offset() as i32;
+        let rows = self.rows as i32;
+        let top = -offset;
+        if line >= top && line < top + rows {
+            return;
+        }
+        let want_offset = (rows / 2 - line).max(0);
+        self.term
+            .scroll_display(Scroll::Delta(want_offset - offset));
+    }
+
+    /// `(position_of_focused, total)` match counts over the whole
+    /// buffer, for the search bar's `n/N`. Walks the buffer once per
+    /// call — fine for a UI refresh, and the walk stops the moment the
+    /// wrap-around comes back to an earlier match.
+    pub fn search_status(&self) -> Option<(Option<usize>, usize)> {
+        let search = self.search.as_ref()?;
+        let mut regex = search.regex.clone();
+        let mut count = 0usize;
+        let mut position: Option<usize> = None;
+        let mut origin = Point::new(Line(-(self.term.grid().history_size() as i32)), Column(0));
+        let bottom = Point::new(
+            Line(self.rows as i32 - 1),
+            Column(self.cols.saturating_sub(1)),
+        );
+        while let Some(m) = self.term.regex_search_right(&mut regex, origin, bottom) {
+            if *m.start() < origin {
+                break; // wrapped
+            }
+            count += 1;
+            if search.focused.as_ref() == Some(&m) {
+                position = Some(count);
+            }
+            if *m.end() >= bottom {
+                break;
+            }
+            origin = m.end().add(&self.term, Boundary::Grid, 1);
+        }
+        Some((position, count))
     }
 
     /// Feed raw PTY output bytes into the terminal parser.
@@ -512,6 +682,7 @@ impl TerminalState {
                 self.blank_hidden_prompt(&mut grid, hidden, offset, user_offset == 0);
             }
         }
+        self.flag_search_matches(&mut grid, user_offset + self.view_bump);
 
         if self.view_bump > 0 {
             self.term
@@ -542,6 +713,10 @@ impl TerminalState {
         if cursor_col < self.cols && (0..self.rows as i32).contains(&cursor_row) {
             grid.cursor = Some((cursor_col, cursor_row as usize));
         }
+        grid.cursor_hidden = matches!(
+            content.cursor.shape,
+            alacritty_terminal::vte::ansi::CursorShape::Hidden
+        );
 
         // Selection range in grid coordinates — alacritty resolves the
         // content-anchored selection against the current viewport.
@@ -683,6 +858,47 @@ impl TerminalState {
         } else {
             None
         };
+    }
+
+    /// Set SEARCH_MATCH on every visible match cell and SEARCH_FOCUS on
+    /// the focused one. Walks only the viewport's rows.
+    fn flag_search_matches(&self, grid: &mut TerminalGrid, offset: usize) {
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
+        let mut regex = search.regex.clone();
+        let top = Point::new(Line(-(offset as i32)), Column(0));
+        let bottom = Point::new(
+            Line(self.rows as i32 - 1 - offset as i32),
+            Column(self.cols.saturating_sub(1)),
+        );
+        let mut origin = top;
+        while let Some(m) = self.term.regex_search_right(&mut regex, origin, bottom) {
+            if *m.start() < origin || *m.start() > bottom {
+                break;
+            }
+            let focused = search.focused.as_ref() == Some(&m);
+            let mut point = *m.start();
+            loop {
+                let row = point.line.0 + offset as i32;
+                if (0..self.rows as i32).contains(&row) && point.column.0 < self.cols {
+                    let mut cell = *grid.get(row as usize, point.column.0);
+                    cell.flags |= CellFlags::SEARCH_MATCH;
+                    if focused {
+                        cell.flags |= CellFlags::SEARCH_FOCUS;
+                    }
+                    grid.set(row as usize, point.column.0, cell);
+                }
+                if point >= *m.end() {
+                    break;
+                }
+                point = point.add(&self.term, Boundary::Grid, 1);
+            }
+            if *m.end() >= bottom {
+                break;
+            }
+            origin = m.end().add(&self.term, Boundary::Grid, 1);
+        }
     }
 
     /// Tint completed / running spans' header rows, embolden the echo,
@@ -1508,6 +1724,89 @@ mod tests {
         assert_eq!(TerminalState::grid_row_text(&grid, 1), "run2 1");
         assert_eq!(grid.cursor, Some((0, 1)));
         assert_eq!(TerminalState::grid_row_text(&grid, 2), "");
+    }
+
+    // ---- search (F14) ----
+
+    #[test]
+    fn search_focuses_newest_match_first_and_cycles() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..60 {
+            let word = if i % 20 == 5 { "needle" } else { "hay" };
+            state.process_bytes(format!("line {i} {word}\r\n").as_bytes());
+        }
+        // Matches at lines 5, 25, 45. Live screen shows 37..60.
+        assert!(state.search_set("NEEDLE"), "case-insensitive literal");
+        let (pos, total) = state.search_status().unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(pos, Some(3), "newest match focused first");
+        assert_eq!(state.display_offset(), 0, "already visible — no scroll");
+
+        state.search_prev();
+        let (pos, _) = state.search_status().unwrap();
+        assert_eq!(pos, Some(2));
+        assert!(
+            state.display_offset() > 0,
+            "scrolled to bring line 25 into view"
+        );
+        let grid = state.grid_snapshot();
+        let focused_rows: Vec<usize> = (0..grid.rows)
+            .filter(|&r| {
+                (0..grid.cols).any(|c| grid.get(r, c).flags.contains(CellFlags::SEARCH_FOCUS))
+            })
+            .collect();
+        assert_eq!(focused_rows.len(), 1, "one focused row visible");
+        let r = focused_rows[0];
+        assert!(TerminalState::grid_row_text(&grid, r).ends_with("needle"));
+        // The focused cells are exactly the word.
+        let flagged: String = (0..grid.cols)
+            .filter(|&c| grid.get(r, c).flags.contains(CellFlags::SEARCH_FOCUS))
+            .map(|c| grid.get(r, c).character)
+            .collect();
+        assert_eq!(flagged, "needle");
+
+        state.search_prev();
+        assert_eq!(state.search_status().unwrap().0, Some(1));
+        state.search_prev();
+        assert_eq!(state.search_status().unwrap().0, Some(3), "wraps to newest");
+        state.search_next();
+        assert_eq!(state.search_status().unwrap().0, Some(1), "wraps to oldest");
+
+        state.search_clear();
+        assert!(!state.search_active());
+        let grid = state.grid_snapshot();
+        assert!(
+            !(0..grid.rows)
+                .any(|r| (0..grid.cols)
+                    .any(|c| grid.get(r, c).flags.contains(CellFlags::SEARCH_MATCH))),
+            "no flags after clear"
+        );
+    }
+
+    #[test]
+    fn search_with_no_match_and_regex_metachars() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(b"price is $5.00 (approx)\r\n");
+        assert!(
+            state.search_set("$5.00 (approx)"),
+            "metacharacters matched literally"
+        );
+        assert_eq!(state.search_status().unwrap(), (Some(1), 1));
+        assert!(state.search_set("zzz"));
+        assert_eq!(state.search_status().unwrap(), (None, 0));
+        assert!(!state.search_set(""), "empty query clears");
+        assert!(!state.search_active());
+    }
+
+    #[test]
+    fn hidden_cursor_is_reported() {
+        let mut state = TerminalState::new(80, 24, 100, ResolvedTheme::default());
+        state.process_bytes(b"x");
+        assert!(!state.grid_snapshot().cursor_hidden);
+        state.process_bytes(b"\x1b[?25l");
+        assert!(state.grid_snapshot().cursor_hidden);
+        state.process_bytes(b"\x1b[?25h");
+        assert!(!state.grid_snapshot().cursor_hidden);
     }
 
     #[test]

@@ -28,11 +28,26 @@ impl App {
             return;
         }
 
+        // Cmd+F toggles the search bar in every mode.
+        if self.is_find_shortcut(&event) {
+            if matches!(self.popup, PopupState::Search) {
+                self.close_search();
+            } else {
+                self.open_search();
+            }
+            return;
+        }
+
         // Popup intercept — exhaustive match, no wildcard.
         match &self.popup {
             PopupState::Hidden => {}
             PopupState::Autocomplete => {
                 if self.handle_autocomplete_key(&event) {
+                    return;
+                }
+            }
+            PopupState::Search => {
+                if self.handle_search_key(&event) {
                     return;
                 }
             }

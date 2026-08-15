@@ -11,10 +11,16 @@ impl App {
         let Some(pane) = self.mux.focused_pane_mut() else {
             return;
         };
+        // While the PTY owns the keyboard (alt screen OR a running
+        // command — sudo, ssh, REPLs), the shell's own cursor is the
+        // only cursor there is; show it. At the prompt the input bar
+        // owns cursor display.
+        let show_cursor = pane.terminal.is_alt_screen() || pane.terminal.is_executing();
         let grid = pane.terminal.grid_snapshot();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
+        renderer.set_show_shell_cursor(show_cursor);
         renderer.set_grid(&grid);
     }
 
@@ -77,7 +83,7 @@ impl App {
             let anchor_col = self.input.cursor_col_in_line() + 2;
 
             renderer.set_autocomplete_popup(&candidates, selected, anchor_col, anchor_row_y);
-        } else {
+        } else if !matches!(self.popup, PopupState::Search) {
             renderer.hide_autocomplete_popup();
         }
     }

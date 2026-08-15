@@ -100,6 +100,79 @@ impl Renderer {
         self.rebuild_combined_buffer();
     }
 
+    /// Render the search bar (F14) in the top-right corner of the
+    /// content area: `🔍 query▏  n/N`. Reuses `popup_instances` — the
+    /// autocomplete popup and the search bar never show together.
+    pub fn set_search_bar(&mut self, query: &str, position: Option<usize>, total: usize) {
+        let cell_w = self.atlas.cell_width;
+        let cell_h = self.atlas.cell_height;
+        let baseline = self.atlas.baseline_offset;
+        let style = self.default_style;
+        let window_w = self.gpu.surface_config.width as f32;
+        let top_y = self.content_top + self.padding_y * 0.5;
+
+        let mut instances = std::mem::take(&mut self.popup_instances);
+        instances.clear();
+
+        let status = if total == 0 {
+            if query.is_empty() {
+                String::new()
+            } else {
+                "no matches".to_string()
+            }
+        } else {
+            match position {
+                Some(p) => format!("{p}/{total}"),
+                None => format!("{total}"),
+            }
+        };
+        // ` ⌕ query▏  status ` — the caret is a thin cell after the query.
+        let text = format!(" ⌕ {query}▏  {status} ");
+        let width_cols = text.chars().count().max(24);
+        let left_x = (window_w - self.padding_x - width_cols as f32 * cell_w).max(0.0);
+
+        let bg = Color::from_hex("#1f2335").unwrap_or_default();
+        let fg = Color::from_hex("#c0caf5").unwrap_or_default();
+        let accent = Color::from_hex("#e0af68").unwrap_or_default();
+        let dim = Color::from_hex("#6a7099").unwrap_or_default();
+
+        instances.push(CellInstance {
+            position: [left_x, top_y],
+            size: [width_cols as f32 * cell_w, cell_h],
+            glyph_uv: [0.0, 0.0, 0.0, 0.0],
+            fg_color: [bg.r, bg.g, bg.b, bg.a],
+            bg_color: [bg.r, bg.g, bg.b, bg.a],
+        });
+        // Accent stripe on the left edge.
+        instances.push(CellInstance {
+            position: [left_x, top_y],
+            size: [2.0, cell_h],
+            glyph_uv: [0.0, 0.0, 0.0, 0.0],
+            fg_color: [accent.r, accent.g, accent.b, accent.a],
+            bg_color: [accent.r, accent.g, accent.b, accent.a],
+        });
+
+        let query_len = query.chars().count();
+        for (i, ch) in text.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            // Positions: 1 = magnifier, 3..3+len = query, then caret, then status.
+            let color = if i == 1 {
+                accent
+            } else if i > 3 + query_len {
+                dim
+            } else {
+                fg
+            };
+            let x = left_x + i as f32 * cell_w;
+            self.render_glyph(ch, style, x, top_y, baseline, color, bg, &mut instances);
+        }
+
+        self.popup_instances = instances;
+        self.rebuild_combined_buffer();
+    }
+
     /// Hide the autocomplete popup.
     pub fn hide_autocomplete_popup(&mut self) {
         if !self.popup_instances.is_empty() {
