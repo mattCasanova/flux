@@ -69,12 +69,12 @@ cyan    = "#7dcfff"
 white   = "#c0caf5"
 
 # Bright variants (ANSI 8-15).
-bright_black   = "#6a7099"
-bright_red     = "#ff9999"
-bright_green   = "#b9e986"
-bright_yellow  = "#f4e070"
+bright_black   = "#6a7799"
+bright_red     = "#ff99a8"
+bright_green   = "#b8e986"
+bright_yellow  = "#f4cc70"
 bright_blue    = "#9cc1ff"
-bright_magenta = "#d6b4ff"
+bright_magenta = "#d6b3ff"
 bright_cyan    = "#a3e6ff"
 bright_white   = "#e0e6ff"
 

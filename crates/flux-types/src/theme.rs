@@ -78,12 +78,12 @@ impl Default for ResolvedTheme {
                 hex("#bb9af7"), // magenta
                 hex("#7dcfff"), // cyan
                 hex("#c0caf5"), // white
-                hex("#6a7099"), // bright black
-                hex("#ff9999"), // bright red
-                hex("#b9e986"), // bright green
-                hex("#f4e070"), // bright yellow
+                hex("#6a7799"), // bright black
+                hex("#ff99a8"), // bright red
+                hex("#b8e986"), // bright green
+                hex("#f4cc70"), // bright yellow
                 hex("#9cc1ff"), // bright blue
-                hex("#d6b4ff"), // bright magenta
+                hex("#d6b3ff"), // bright magenta
                 hex("#a3e6ff"), // bright cyan
                 hex("#e0e6ff"), // bright white
             ],

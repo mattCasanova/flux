@@ -577,10 +577,16 @@ impl TerminalState {
         let history = self.term.grid().history_size();
         let start_line = self.tracker.line(history, start);
         let end_line = self.tracker.line(history, end);
-        // Only a prompt sitting on the live screen pulls the viewport
-        // up; one that scrolled into history (background output after
-        // the prompt) is just blanked where it shows.
-        let bump = if (0..self.rows as i64).contains(&start_line) {
+        // Pull the viewport up only when the prompt sits on the very
+        // bottom rows of a full screen — then the lines that come in
+        // at the top are the ones that just scrolled off, and the view
+        // stays continuous. Anywhere else (after `clear`, in a short
+        // session, or scrolled into history by background output) the
+        // prompt rows are simply blanked: bumping there would drag
+        // history back into view — macOS's `clear` sends no `\e[3J`,
+        // so the "cleared" screen lives on in history and a bump from
+        // row 0 showed it right back (dogfood, 2026-08-15).
+        let bump = if start_line >= 0 && end_line == self.rows as i64 - 1 {
             self.rows - start_line as usize
         } else {
             0
@@ -1300,6 +1306,57 @@ mod tests {
         // holding "line 39".
         state.start_selection(SelectMode::Line, 0, 23, false);
         assert_eq!(state.selection_text().as_deref(), Some("line 39\n"));
+    }
+
+    /// Dogfood 2026-08-15: macOS `clear` sends only `\e[H\e[2J`, which
+    /// pushes the screen into history instead of wiping it. The new
+    /// prompt on row 0 must NOT pull that history back into view.
+    #[test]
+    fn clear_without_history_wipe_shows_a_blank_screen() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for i in 0..40 {
+            state.process_bytes(format!("line {i}\r\n").as_bytes());
+        }
+        state.process_bytes(b"\x1b[H\x1b[2J");
+        assert!(
+            state.term.grid().history_size() >= 40,
+            "screen went into history"
+        );
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        for row in 0..24 {
+            assert_eq!(
+                TerminalState::grid_row_text(&grid, row),
+                "",
+                "row {row} must be blank after clear"
+            );
+        }
+        assert_eq!(grid.cursor, None);
+        assert_eq!(state.display_offset(), 0);
+
+        // A short block after the clear anchors on its own last row and
+        // still shows nothing from before the clear.
+        state.process_bytes(b"ls\r\n");
+        state.process_bytes(C);
+        state.process_bytes(b"a\r\nb\r\n");
+        state.process_bytes(&d(0));
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >ls");
+        assert_eq!(TerminalState::grid_row_text(&grid, 2), "b");
+        assert_eq!(
+            TerminalState::grid_row_text(&grid, 3),
+            "",
+            "live prompt hidden"
+        );
+        assert_eq!(grid.cursor, Some((0, 2)), "anchor on the last output row");
+        for row in 4..24 {
+            assert_eq!(TerminalState::grid_row_text(&grid, row), "");
+        }
     }
 
     #[test]
