@@ -98,27 +98,22 @@ impl App {
     }
 
     /// Which tab a click at pixel position lands on, if it's inside
-    /// the tab bar. Uses the same ` N:title ` layout the renderer
-    /// draws, so hit ranges match what's painted.
+    /// the tab bar. Tabs split the window evenly, so the slot is just
+    /// `x / (width / n)` — matching what's painted by construction.
     pub(super) fn tab_at_pixel(&self, x: f64, y: f64) -> Option<usize> {
-        if self.mux.tabs.len() < 2 {
+        let n = self.mux.tabs.len();
+        if n < 2 {
             return None;
         }
         let metrics = self.renderer.as_ref()?.cell_metrics();
         if y < 0.0 || y >= metrics.height as f64 {
             return None;
         }
-        let col = (x / metrics.width as f64) as usize;
-        let mut start = 0usize;
-        for (idx, tab) in self.mux.tabs.iter().enumerate() {
-            let label = format!(" {}:{} ", idx + 1, tab_label(tab));
-            let end = start + label.chars().count();
-            if (start..end).contains(&col) {
-                return Some(idx);
-            }
-            start = end;
+        let width = self.window.as_ref()?.inner_size().width as f64;
+        if width <= 0.0 || x < 0.0 || x >= width {
+            return None;
         }
-        None
+        Some(((x / (width / n as f64)) as usize).min(n - 1))
     }
 
     /// Window title follows the focused tab.
