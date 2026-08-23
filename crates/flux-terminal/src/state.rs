@@ -179,6 +179,20 @@ struct ViewPlan {
 /// previous run back in.
 const CLEAR_KEEP_OUTPUT_ROWS: AbsRow = 2;
 
+/// Human duration for the block header: sub-second in ms, sub-minute
+/// in tenths of a second, else m+s.
+fn format_duration(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", d.as_secs_f64())
+    } else {
+        let secs = d.as_secs();
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    }
+}
+
 /// End (exclusive) of the side-parser run starting at `start`. A run
 /// ends right *after* a byte that can terminate an OSC (`BEL`, `\\`,
 /// `0x9c`) or right *before* a byte that introduces an escape sequence
@@ -752,6 +766,9 @@ impl TerminalState {
             }
         }
         self.flag_search_matches(&mut grid, user_offset + self.view_bump);
+        if self.blocks_enabled && !self.is_alt_screen() {
+            grid.sticky_header = self.sticky_header(user_offset + self.view_bump);
+        }
 
         if self.view_bump > 0 {
             self.term
@@ -1031,26 +1048,77 @@ impl TerminalState {
             }
         }
 
-        // `✘ code` at the right edge of the first header row, only if
-        // that space is blank (a right prompt lives there otherwise).
-        if failed && span.prompt_start >= lo && span.prompt_start < lo + rows {
+        // `✘ code · duration` (failed) or a dim duration (succeeded) at
+        // the right edge of the first header row, only if that space is
+        // blank (a right prompt lives there otherwise).
+        if span.prompt_start >= lo && span.prompt_start < lo + rows {
+            let duration = span.duration.map(format_duration);
+            let label = match (failed, duration) {
+                (true, Some(d)) => format!("✘ {} · {d}", span.exit_code.unwrap_or(0)),
+                (true, None) => format!("✘ {}", span.exit_code.unwrap_or(0)),
+                (false, Some(d)) => d,
+                (false, None) => return,
+            };
             let row = (span.prompt_start - lo) as usize;
-            let label = format!("✘ {}", span.exit_code.unwrap_or(0));
             let width = label.chars().count() + 1;
             if width <= self.cols {
                 let start_col = self.cols - width;
                 let blank = (start_col..self.cols).all(|col| grid.get(row, col).character == ' ');
                 if blank {
+                    let fg = if failed {
+                        self.theme.ansi(1)
+                    } else {
+                        self.theme.ansi(8) // dim / bright black
+                    };
                     for (i, ch) in label.chars().enumerate() {
                         let mut cell = *grid.get(row, start_col + i);
                         cell.character = ch;
-                        cell.fg = self.theme.ansi(1);
-                        cell.flags |= CellFlags::BOLD;
+                        cell.fg = fg;
+                        if failed {
+                            cell.flags |= CellFlags::BOLD;
+                        }
                         grid.set(row, start_col + i, cell);
                     }
                 }
             }
         }
+    }
+
+    /// The floating header (#28): when the viewport's top row sits
+    /// inside a block's OUTPUT (its header rows scrolled off above),
+    /// return that block's command so the renderer can pin it along
+    /// the pane's top edge.
+    fn sticky_header(&self, offset: usize) -> Option<flux_types::StickyHeader> {
+        let history = self.term.grid().history_size();
+        let top = self.tracker.abs(history, -(offset as i32));
+        let span = *self.tracker.spans().find(|s| {
+            !s.at_prompt()
+                && s.prompt_start < top
+                && s.header_end() <= top
+                && s.end.map(|end| top < end).unwrap_or(true)
+        })?;
+        let (echo_row, echo_col) = span.prompt_end?;
+        let mut command = String::new();
+        for r in echo_row..span.header_end() {
+            let line = self.tracker.line(history, r);
+            if line < -(history as i64) {
+                return None; // header rows already pruned from scrollback
+            }
+            let grid_row = &self.term.grid()[Line(line as i32)];
+            let from = if r == echo_row { echo_col } else { 0 };
+            for col in from..self.cols {
+                let ch = grid_row[Column(col)].c;
+                if ch != '\0' {
+                    command.push(ch);
+                }
+            }
+        }
+        let command = command.trim().to_string();
+        (!command.is_empty()).then(|| flux_types::StickyHeader {
+            command,
+            failed: span.exit_code.is_some_and(|code| code != 0),
+            running: !span.is_closed(),
+        })
     }
 
     /// The shell's current working directory, if known via OSC 7.
@@ -1119,6 +1187,12 @@ impl TerminalState {
     /// arrow keys must then be encoded as `\x1bOA`-style sequences.
     pub fn app_cursor_keys(&self) -> bool {
         self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
+    /// True once shell integration has produced any OSC 133 marker on
+    /// this terminal.
+    pub fn integration_active(&self) -> bool {
+        self.block_capture.integration_active()
     }
 
     /// True while a command is running (between OSC 133;C and 133;D).
@@ -1691,7 +1765,7 @@ mod tests {
         state.process_bytes(b"~ >");
         state.process_bytes(B);
         let grid = state.grid_snapshot();
-        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >ls");
+        assert!(TerminalState::grid_row_text(&grid, 0).starts_with("~ >ls"));
         assert_eq!(TerminalState::grid_row_text(&grid, 2), "b");
         assert_eq!(
             TerminalState::grid_row_text(&grid, 3),
@@ -1727,9 +1801,8 @@ mod tests {
         state.process_bytes(B);
 
         let grid = state.grid_snapshot();
-        assert_eq!(
-            TerminalState::grid_row_text(&grid, 0),
-            "~ >clear",
+        assert!(
+            TerminalState::grid_row_text(&grid, 0).starts_with("~ >clear"),
             "the clear block is pulled back into view"
         );
         assert_eq!(grid.cursor, Some((0, 0)), "…and anchors at the bottom");
@@ -1744,13 +1817,13 @@ mod tests {
         state.scroll_lines(1);
         let grid = state.grid_snapshot();
         assert_eq!(TerminalState::grid_row_text(&grid, 0), "line 39");
-        assert_eq!(TerminalState::grid_row_text(&grid, 1), "~ >clear");
+        assert!(TerminalState::grid_row_text(&grid, 1).starts_with("~ >clear"));
         assert_eq!(grid.cursor, None, "no anchor while scrolled");
         state.scroll_lines(1);
         let grid = state.grid_snapshot();
         assert_eq!(TerminalState::grid_row_text(&grid, 0), "line 38");
         assert_eq!(TerminalState::grid_row_text(&grid, 1), "line 39");
-        assert_eq!(TerminalState::grid_row_text(&grid, 2), "~ >clear");
+        assert!(TerminalState::grid_row_text(&grid, 2).starts_with("~ >clear"));
         assert_eq!(grid.cursor, None);
         state.scroll_to_bottom();
 
@@ -1763,8 +1836,8 @@ mod tests {
         state.process_bytes(b"~ >");
         state.process_bytes(B);
         let grid = state.grid_snapshot();
-        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >clear");
-        assert_eq!(TerminalState::grid_row_text(&grid, 1), "~ >ls");
+        assert!(TerminalState::grid_row_text(&grid, 0).starts_with("~ >clear"));
+        assert!(TerminalState::grid_row_text(&grid, 1).starts_with("~ >ls"));
         assert_eq!(TerminalState::grid_row_text(&grid, 2), "a");
         assert_eq!(grid.cursor, Some((0, 2)));
     }
@@ -1813,7 +1886,7 @@ mod tests {
         // At the tail: the `ls -la /tmp` header is visible; find its row.
         let grid = state.grid_snapshot();
         let header_row = (0..grid.rows)
-            .find(|&r| TerminalState::grid_row_text(&grid, r) == "~ >ls -la /tmp")
+            .find(|&r| TerminalState::grid_row_text(&grid, r).starts_with("~ >ls -la /tmp"))
             .expect("ls header visible");
         assert_eq!(
             state.block_command_at_row(header_row).as_deref(),
@@ -1829,14 +1902,99 @@ mod tests {
         // be scrolled to the top), so the first hop is `echo one`.
         assert!(state.scroll_to_block(-1), "there is a previous block");
         let grid = state.grid_snapshot();
-        assert_eq!(TerminalState::grid_row_text(&grid, 0), "~ >echo one");
+        assert!(TerminalState::grid_row_text(&grid, 0).starts_with("~ >echo one"));
         assert!(!state.scroll_to_block(-1), "no block above the first");
         // Next: the `ls` header lives on the live screen, so the closest
         // the viewport can get is the tail (offset 0) with it visible.
         assert!(state.scroll_to_block(1));
         assert_eq!(state.display_offset(), 0);
         let grid = state.grid_snapshot();
-        assert!((0..grid.rows).any(|r| TerminalState::grid_row_text(&grid, r) == "~ >ls -la /tmp"));
+        assert!(
+            (0..grid.rows)
+                .any(|r| TerminalState::grid_row_text(&grid, r).starts_with("~ >ls -la /tmp"))
+        );
+    }
+
+    // ---- sticky header + duration (v0.3b) ----
+
+    #[test]
+    fn sticky_header_appears_only_when_the_block_header_scrolls_off() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        let output: Vec<String> = (0..40).map(|i| format!("out {i}")).collect();
+        let refs: Vec<&str> = output.iter().map(|s| s.as_str()).collect();
+        cycle(&mut state, "~ >", "make world", &refs, 0);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+
+        // Tail: the header is off-screen above; its output fills the view.
+        let grid = state.grid_snapshot();
+        let sticky = grid.sticky_header.expect("output spans the top");
+        assert_eq!(sticky.command, "make world");
+        assert!(!sticky.failed);
+        assert!(!sticky.running);
+
+        // Scroll up until the real header row is at the top: no sticky.
+        assert!(state.scroll_to_block(-1));
+        let grid = state.grid_snapshot();
+        assert!(TerminalState::grid_row_text(&grid, 0).starts_with("~ >make world"));
+        assert!(grid.sticky_header.is_none(), "own header visible");
+        state.scroll_to_bottom();
+    }
+
+    #[test]
+    fn sticky_header_marks_failed_and_running_blocks() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        let output: Vec<String> = (0..30).map(|i| format!("err {i}")).collect();
+        let refs: Vec<&str> = output.iter().map(|s| s.as_str()).collect();
+        cycle(&mut state, "~ >", "bad cmd", &refs, 2);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        let sticky = grid.sticky_header.expect("failed block spans top");
+        assert!(sticky.failed);
+
+        // A still-running command that overflowed the screen.
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        state.process_bytes(b"tail -f log\r\n");
+        state.process_bytes(C);
+        for i in 0..40 {
+            state.process_bytes(format!("line {i}\r\n").as_bytes());
+        }
+        let grid = state.grid_snapshot();
+        let sticky = grid.sticky_header.expect("running block spans top");
+        assert!(sticky.running);
+        assert_eq!(sticky.command, "tail -f log");
+    }
+
+    #[test]
+    fn closed_blocks_carry_a_duration_and_header_shows_it() {
+        let mut state = TerminalState::new(40, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "P> ", "true", &[], 0);
+        let span = state.tracker().spans().next().copied().unwrap();
+        assert!(span.duration.is_some(), "C..D wall time recorded");
+        // Success label: dim duration right-aligned on the header row.
+        let grid = state.grid_snapshot();
+        let tail: String = (30..40).map(|c| grid.get(0, c).character).collect();
+        assert!(
+            tail.trim_end().ends_with("ms") || tail.trim_end().ends_with('s'),
+            "duration label present: {tail:?}"
+        );
+        let theme = ResolvedTheme::default();
+        let label_col = (30..40).find(|&c| grid.get(0, c).character != ' ').unwrap();
+        assert_eq!(grid.get(0, label_col).fg, theme.ansi(8), "dim, not red");
+    }
+
+    #[test]
+    fn format_duration_ranges() {
+        use std::time::Duration;
+        assert_eq!(format_duration(Duration::from_millis(7)), "7ms");
+        assert_eq!(format_duration(Duration::from_millis(1_240)), "1.2s");
+        assert_eq!(format_duration(Duration::from_secs(83)), "1m23s");
     }
 
     // ---- search (F14) ----
@@ -1981,15 +2139,17 @@ mod tests {
         cycle(&mut state, "P> ", "true", &["ok"], 0);
         let theme = ResolvedTheme::default();
         let grid = state.grid_snapshot();
-        // Row 0: failed header.
+        // Row 0: failed header with `✘ 1 · <duration>` at the right edge.
         assert_eq!(grid.get(0, 0).bg, theme.block_failed);
-        let tail: String = (36..40).map(|c| grid.get(0, c).character).collect();
-        assert_eq!(tail, "✘ 1 ");
-        assert_eq!(grid.get(0, 36).fg, theme.ansi(1));
-        // Row 1: successful header, no label.
+        let row0 = TerminalState::grid_row_text(&grid, 0);
+        assert!(row0.contains("✘ 1 ·"), "exit + duration: {row0:?}");
+        assert!(row0.ends_with("ms") || row0.ends_with('s'));
+        let label_col = (20..40).find(|&c| grid.get(0, c).character == '✘').unwrap();
+        assert_eq!(grid.get(0, label_col).fg, theme.ansi(1));
+        // Row 1: successful header with a dim duration.
         assert_eq!(grid.get(1, 0).bg, theme.block_header);
-        let tail: String = (36..40).map(|c| grid.get(1, c).character).collect();
-        assert_eq!(tail, "    ");
+        let row1 = TerminalState::grid_row_text(&grid, 1);
+        assert!(row1.ends_with("ms") || row1.ends_with('s'), "{row1:?}");
         // Row 2: output, untinted.
         assert_eq!(TerminalState::grid_row_text(&grid, 2), "ok");
         assert_eq!(grid.get(2, 0).bg, theme.background);

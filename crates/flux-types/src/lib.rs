@@ -109,6 +109,16 @@ impl Default for CellData {
     }
 }
 
+/// The floating block header (#28): shown along the pane's top edge
+/// while the block's own header rows are scrolled off above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StickyHeader {
+    pub command: String,
+    pub failed: bool,
+    /// Block still executing (no exit yet).
+    pub running: bool,
+}
+
 /// A grid of cells — the renderer's input.
 pub struct TerminalGrid {
     pub cells: Vec<CellData>,
@@ -130,6 +140,9 @@ pub struct TerminalGrid {
     /// Lines of scrollback history above the live screen — the extent
     /// `display_offset` can reach. Drives the scrollbar.
     pub history_size: usize,
+    /// Floating header for the block whose output spans the viewport
+    /// top (its own header rows scrolled off above). Renderer overlay.
+    pub sticky_header: Option<StickyHeader>,
 }
 
 impl TerminalGrid {
@@ -142,6 +155,7 @@ impl TerminalGrid {
             rows,
             display_offset: 0,
             history_size: 0,
+            sticky_header: None,
         }
     }
 

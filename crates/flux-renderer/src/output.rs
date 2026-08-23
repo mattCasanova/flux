@@ -373,6 +373,56 @@ impl Renderer {
             }
         }
 
+        // Floating block header (#28): pinned along the pane's top
+        // edge while the block's own header rows are scrolled off.
+        if let Some(sticky) = &grid.sticky_header {
+            let bar_bg = if sticky.failed {
+                Color::new(0.30, 0.16, 0.20, 0.96)
+            } else {
+                Color::new(0.14, 0.16, 0.26, 0.96)
+            };
+            let fg = if sticky.failed {
+                Color::new(0.97, 0.46, 0.56, 1.0) // theme red-ish
+            } else {
+                Color::new(0.75, 0.79, 0.96, 1.0)
+            };
+            let width = grid.cols as f32 * cell_w;
+            instances.push(CellInstance {
+                position: [pad_x, pad_y],
+                size: [width, cell_h],
+                glyph_uv: [0.0, 0.0, 0.0, 0.0],
+                fg_color: [bar_bg.r, bar_bg.g, bar_bg.b, bar_bg.a],
+                bg_color: [bar_bg.r, bar_bg.g, bar_bg.b, bar_bg.a],
+            });
+            let marker = if sticky.running { "… " } else { "❯ " };
+            let text: String = marker.chars().chain(sticky.command.chars()).collect();
+            let baseline = self.atlas.baseline_offset;
+            let style = self.default_style;
+            for (i, ch) in text.chars().enumerate() {
+                if (i + 1) as f32 * cell_w > width {
+                    break;
+                }
+                if ch == ' ' {
+                    continue;
+                }
+                let color = if i < marker.chars().count() {
+                    Color::new(0.478, 0.635, 0.969, 1.0)
+                } else {
+                    fg
+                };
+                self.render_glyph(
+                    ch,
+                    style,
+                    pad_x + i as f32 * cell_w,
+                    pad_y,
+                    baseline,
+                    color,
+                    bar_bg,
+                    &mut instances,
+                );
+            }
+        }
+
         self.pane_instances.insert(pane_id, instances);
         self.set_scrollbar(pane_id, grid, view);
         self.rebuild_combined_buffer();

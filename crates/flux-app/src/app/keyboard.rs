@@ -207,6 +207,14 @@ impl App {
                         .input_mut()
                         .map(|editor| editor.take_line())
                         .unwrap_or_default();
+                    // Empty Enter at an integrated prompt is a no-op
+                    // (Warp behavior) — sending \r would mint a bare
+                    // header-only block for nothing.
+                    if line.is_empty() && self.terminal().is_some_and(|t| t.integration_active()) {
+                        self.update_input_display();
+                        self.request_redraw();
+                        return;
+                    }
                     // Multi-line buffers must reach the shell as ONE
                     // unit. Raw embedded \n = one accept-line per line
                     // in zle, which shatters loops into per-line parse

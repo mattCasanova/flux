@@ -15,6 +15,7 @@
 //! and answers row queries.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 /// Absolute row index — see module docs. Signed so grid-line math
 /// (`abs - dropped - history`) never underflows mid-expression.
@@ -38,6 +39,10 @@ pub(crate) struct Span {
     /// Row where OSC 133;D fired — one past the last output row.
     pub end: Option<AbsRow>,
     pub exit_code: Option<i32>,
+    /// When execution started (OSC 133;C arrived).
+    pub started_at: Option<Instant>,
+    /// Wall time from C to D.
+    pub duration: Option<Duration>,
 }
 
 impl Span {
@@ -48,6 +53,8 @@ impl Span {
             output_start: None,
             end: None,
             exit_code: None,
+            started_at: None,
+            duration: None,
         }
     }
 
@@ -154,11 +161,16 @@ impl SpanTracker {
     /// OSC 133;C at `row`. Without an open prompt span (integration
     /// came alive mid-command) a header-less span starts here.
     pub fn output_start(&mut self, row: AbsRow) {
+        let now = Instant::now();
         match self.spans.back_mut() {
-            Some(last) if last.at_prompt() => last.output_start = Some(row),
+            Some(last) if last.at_prompt() => {
+                last.output_start = Some(row);
+                last.started_at = Some(now);
+            }
             _ => {
                 let mut span = Span::new(row);
                 span.output_start = Some(row);
+                span.started_at = Some(now);
                 self.spans.push_back(span);
             }
         }
@@ -172,6 +184,7 @@ impl SpanTracker {
         {
             last.end = Some(row.max(last.prompt_start));
             last.exit_code = exit_code;
+            last.duration = last.started_at.map(|t| t.elapsed());
         }
     }
 
