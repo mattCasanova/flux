@@ -4,6 +4,6 @@
 
 pub mod input_bar;
 mod popup;
-mod tab_bar;
+pub mod sidebar;
 
 pub use popup::PopupKind;

@@ -46,6 +46,7 @@ pub enum Action {
     FocusPaneRight,
     FocusPaneUp,
     FocusPaneDown,
+    ToggleSidebar,
 }
 
 impl Action {
@@ -67,6 +68,7 @@ impl Action {
                 | Action::FocusPaneRight
                 | Action::FocusPaneUp
                 | Action::FocusPaneDown
+                | Action::ToggleSidebar
         )
     }
 
@@ -104,6 +106,7 @@ impl Action {
             Action::FocusPaneRight => "focus_pane_right".into(),
             Action::FocusPaneUp => "focus_pane_up".into(),
             Action::FocusPaneDown => "focus_pane_down".into(),
+            Action::ToggleSidebar => "toggle_sidebar".into(),
         }
     }
 
@@ -132,6 +135,7 @@ impl Action {
             "focus_pane_right" => Action::FocusPaneRight,
             "focus_pane_up" => Action::FocusPaneUp,
             "focus_pane_down" => Action::FocusPaneDown,
+            "toggle_sidebar" => Action::ToggleSidebar,
             _ => {
                 let n: u8 = name.strip_prefix("tab_")?.parse().ok()?;
                 if (1..=9).contains(&n) {
@@ -169,6 +173,7 @@ impl Action {
             Action::FocusPaneRight,
             Action::FocusPaneUp,
             Action::FocusPaneDown,
+            Action::ToggleSidebar,
         ];
         all.extend((1..=9).map(Action::Tab));
         all
@@ -343,6 +348,7 @@ impl Keymap {
         bind(Action::FocusPaneRight, format!("{primary}+alt+right"));
         bind(Action::FocusPaneUp, format!("{primary}+alt+up"));
         bind(Action::FocusPaneDown, format!("{primary}+alt+down"));
+        bind(Action::ToggleSidebar, format!("{primary}+shift+b"));
         map
     }
 

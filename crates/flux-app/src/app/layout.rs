@@ -24,13 +24,11 @@ impl App {
         let metrics = renderer.cell_metrics();
         let pad_x = padding_x(&self.config, window);
         let pad_y = padding_y(&self.config, window);
-        // The tab bar (2+ tabs) takes one row off the top, in raw mode
-        // too — vim in one tab shouldn't hide the others.
-        let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
-        renderer.set_content_top(bar_h);
-        let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - bar_h).max(0.0);
-        let content = flux_types::Rect::new(pad_x, pad_y + bar_h, usable_w, usable_h);
+        // The sidebar takes a strip off the left when visible.
+        let sidebar_w = self.sidebar_width_px();
+        let usable_w = (inner_size.width as f32 - pad_x * 2.0 - sidebar_w).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
+        let content = flux_types::Rect::new(sidebar_w + pad_x, pad_y, usable_w, usable_h);
         let cell_w = metrics.width;
         let cell_h = metrics.height;
 
@@ -56,9 +54,22 @@ impl App {
         }
         self.update_pane_frames();
 
-        // The bar's background rect spans the window — rebuild it so a
-        // resize doesn't leave it at the old width.
-        self.update_tab_bar();
+        // The panel spans the window height — rebuild on layout so a
+        // resize doesn't leave it stale.
+        self.update_sidebar();
+    }
+
+    /// Sidebar width in physical pixels (0 when hidden).
+    pub(super) fn sidebar_width_px(&self) -> f32 {
+        if !self.sidebar_visible {
+            return 0.0;
+        }
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0);
+        self.config.sidebar.width * scale
     }
 
     /// Content rect (pixels) the pane tree is laid out in — same math
@@ -69,12 +80,13 @@ impl App {
         let inner_size = window.inner_size();
         let pad_x = padding_x(&self.config, window);
         let pad_y = padding_y(&self.config, window);
-        let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
-        let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - bar_h).max(0.0);
+        let _ = renderer;
+        let sidebar_w = self.sidebar_width_px();
+        let usable_w = (inner_size.width as f32 - pad_x * 2.0 - sidebar_w).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
         Some(flux_types::Rect::new(
-            pad_x,
-            pad_y + bar_h,
+            sidebar_w + pad_x,
+            pad_y,
             usable_w,
             usable_h,
         ))

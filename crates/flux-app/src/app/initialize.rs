@@ -37,7 +37,12 @@ impl App {
         // Reserve `MIN_INPUT_BAR_ROWS` rows at the bottom for the divider + input editor.
         let metrics = renderer.cell_metrics();
         let inner_size = window.inner_size();
-        let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
+        let sidebar_w = if self.config.sidebar.visible {
+            self.config.sidebar.width * scale_factor
+        } else {
+            0.0
+        };
+        let usable_w = (inner_size.width as f32 - pad_x * 2.0 - sidebar_w).max(0.0);
         let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
         let cols = (usable_w / metrics.width) as usize;
         let total_rows = (usable_h / metrics.height) as usize;

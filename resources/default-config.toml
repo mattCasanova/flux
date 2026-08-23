@@ -100,7 +100,8 @@ bright_white   = "#e0e6ff"
 #   accent, divider, cursor, cursor_text,
 #   selection, search_match, search_focus,
 #   scrollbar_thumb, scrollbar_track,
-#   tab_bg, tab_text, tab_focused_bg, tab_focused_text,
+#   tab_bg, tab_text, tab_focused_bg, tab_focused_text,  # sidebar panel
+#   sidebar_running,
 #   input_text, input_dim,
 #   popup_bg, popup_selected_bg, popup_directory, popup_file, popup_symlink,
 #   notice_bg, notice_text,
@@ -109,6 +110,13 @@ bright_white   = "#e0e6ff"
 # Examples:
 # accent    = "#ff9e64"
 # selection = "#7aa2f74d"   # last byte = opacity
+
+[sidebar]
+# The left tab panel: title, branch · folder, and a running-command
+# dot per tab. Cmd+Shift+B (toggle_sidebar) shows/hides it live.
+visible = true
+# Width in logical pixels.
+width = 230
 
 [scrollback]
 # Scrollback capacity in lines. 0 disables history entirely.
@@ -155,3 +163,4 @@ enabled = true
 # split_down       = "cmd+shift+d"
 # close_pane       = "cmd+shift+w"
 # focus_pane_left  = "cmd+alt+left"    # …_right, _up, _down
+# toggle_sidebar   = "cmd+shift+b"

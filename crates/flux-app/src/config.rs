@@ -52,6 +52,9 @@ pub struct FluxConfig {
     /// the same reason as `scrollback`.
     #[serde(default)]
     pub blocks: BlocksConfig,
+    /// `[sidebar]` — the left tab panel.
+    #[serde(default)]
+    pub sidebar: SidebarConfig,
     /// `[keys]` — action name → chord string overrides (F15). See
     /// `keys.rs` for names and syntax; unset actions keep defaults.
     #[serde(default)]
@@ -70,6 +73,29 @@ pub struct BlocksConfig {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SidebarConfig {
+    /// Start with the sidebar shown. Cmd+Shift+B toggles it live.
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    /// Sidebar width in logical pixels.
+    #[serde(default = "default_sidebar_width")]
+    pub width: f32,
+}
+
+fn default_sidebar_width() -> f32 {
+    230.0
+}
+
+impl Default for SidebarConfig {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            width: default_sidebar_width(),
+        }
+    }
 }
 
 impl Default for BlocksConfig {

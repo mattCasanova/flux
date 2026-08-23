@@ -74,8 +74,10 @@ impl App {
 
         if any_title {
             self.apply_focused_title();
-            self.update_tab_bar();
         }
+        // Running dots / cwd / titles live in the sidebar — refresh
+        // (change-detected, so floods are cheap).
+        self.update_sidebar();
 
         if focused_dirty {
             // Raw-mode state can change on any PTY output (vim enters alt

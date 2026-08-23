@@ -80,7 +80,7 @@ impl App {
                 } else if was_current {
                     self.after_tab_switch();
                 } else {
-                    self.update_tab_bar();
+                    self.update_sidebar();
                 }
             }
             None => self.after_tab_switch(),
@@ -218,38 +218,80 @@ impl App {
         self.apply_window_layout();
         self.sync_raw_mode();
         self.apply_focused_title();
-        self.update_tab_bar();
+        self.update_sidebar();
         self.update_display();
         self.update_input_display();
         self.request_redraw();
     }
 
-    /// Push the current tab labels to the renderer.
-    pub(super) fn update_tab_bar(&mut self) {
-        let titles: Vec<String> = self.mux.tabs.iter().map(tab_label).collect();
+    /// Rebuild the sidebar entries (title, branch · folder, running
+    /// dot) and push them to the renderer — skipped when nothing
+    /// changed, so output floods don't churn the GPU buffers.
+    pub(super) fn update_sidebar(&mut self) {
+        let width = self.sidebar_width_px();
+        let mut entries: Vec<flux_renderer::SidebarEntry> = Vec::new();
+        for tab in &self.mux.tabs {
+            let cwd = tab
+                .focused_pane()
+                .and_then(|p| p.terminal.cwd().map(|c| c.to_path_buf()));
+            let branch = cwd.as_deref().and_then(git_branch);
+            let folder = cwd
+                .as_deref()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+            let subtitle = match (branch, folder) {
+                (Some(b), Some(f)) => format!("{b} · {f}"),
+                (Some(b), None) => b,
+                (None, Some(f)) => f,
+                (None, None) => String::new(),
+            };
+            let running = tab.root.panes().iter().any(|p| p.terminal.is_executing());
+            entries.push(flux_renderer::SidebarEntry {
+                title: tab_label(tab),
+                subtitle,
+                running,
+            });
+        }
         let focused = self.mux.current_tab;
+        let state = (entries.clone(), focused, width as u32);
+        if self.last_sidebar.as_ref() == Some(&state) {
+            return;
+        }
+        self.last_sidebar = Some(state);
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_tab_bar(&titles, focused);
+            renderer.set_sidebar(&entries, focused, width);
         }
     }
 
-    /// Which tab a click at pixel position lands on, if it's inside
-    /// the tab bar. Tabs split the window evenly, so the slot is just
-    /// `x / (width / n)` — matching what's painted by construction.
+    /// Which sidebar entry a click lands on, if inside the panel.
     pub(super) fn tab_at_pixel(&self, x: f64, y: f64) -> Option<usize> {
-        let n = self.mux.tabs.len();
-        if n < 2 {
-            return None;
-        }
-        let metrics = self.renderer.as_ref()?.cell_metrics();
-        if y < 0.0 || y >= metrics.height as f64 {
-            return None;
-        }
-        let width = self.window.as_ref()?.inner_size().width as f64;
+        let width = self.sidebar_width_px() as f64;
         if width <= 0.0 || x < 0.0 || x >= width {
             return None;
         }
-        Some(((x / (width / n as f64)) as usize).min(n - 1))
+        let renderer = self.renderer.as_ref()?;
+        let entry_h = renderer.sidebar_entry_height() as f64;
+        let y = y - flux_renderer::SIDEBAR_TOP_PAD as f64;
+        if y < 0.0 {
+            return None;
+        }
+        let idx = (y / entry_h) as usize;
+        (idx < self.mux.tabs.len()).then_some(idx)
+    }
+
+    /// Cmd+Shift+B — show/hide the sidebar. Pane widths change; blocks
+    /// survive via reflow re-anchoring.
+    pub(super) fn toggle_sidebar(&mut self) {
+        self.sidebar_visible = !self.sidebar_visible;
+        self.last_sidebar = None;
+        if !self.sidebar_visible
+            && let Some(renderer) = &mut self.renderer
+        {
+            renderer.hide_sidebar();
+        }
+        self.apply_window_layout();
+        self.update_display();
+        self.update_input_display();
+        self.request_redraw();
     }
 
     /// Window title follows the focused tab.
@@ -272,6 +314,38 @@ impl App {
             .map(|pane| (pane.terminal.cols(), pane.terminal.rows()))
             .unwrap_or((80, 24))
     }
+}
+
+/// Current git branch for `cwd` (walking up; worktree `.git` files
+/// followed). None outside a repository.
+fn git_branch(cwd: &std::path::Path) -> Option<String> {
+    let mut dir = Some(cwd);
+    while let Some(d) = dir {
+        let dot_git = d.join(".git");
+        let head_path = if dot_git.is_file() {
+            // Worktree: `.git` is a file "gitdir: <path>".
+            let content = std::fs::read_to_string(&dot_git).ok()?;
+            let gitdir = content.trim().strip_prefix("gitdir: ")?.to_string();
+            let base = std::path::Path::new(&gitdir);
+            let abs = if base.is_absolute() {
+                base.to_path_buf()
+            } else {
+                d.join(base)
+            };
+            abs.join("HEAD")
+        } else {
+            dot_git.join("HEAD")
+        };
+        if let Ok(content) = std::fs::read_to_string(&head_path) {
+            let content = content.trim();
+            return Some(match content.strip_prefix("ref: refs/heads/") {
+                Some(branch) => branch.to_string(),
+                None => content.chars().take(7).collect(), // detached
+            });
+        }
+        dir = d.parent();
+    }
+    None
 }
 
 /// Label for a tab: the shell-set title if any, else the cwd's last

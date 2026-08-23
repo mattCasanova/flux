@@ -73,6 +73,11 @@ pub struct App {
     pub(crate) search: search::SearchBar,
     /// Armed close confirmation: (what, id) and when (#58).
     pub(crate) close_confirm: Option<((&'static str, u64), std::time::Instant)>,
+    /// Sidebar shown? (Cmd+Shift+B toggles; `[sidebar] visible` seeds.)
+    pub(crate) sidebar_visible: bool,
+    /// Last sidebar state pushed to the renderer — skip identical
+    /// rebuilds during output floods.
+    pub(crate) last_sidebar: Option<(Vec<flux_renderer::SidebarEntry>, usize, u32)>,
     /// Fractional scroll remainder from trackpad pixel deltas — whole
     /// lines are consumed per wheel event, the rest accumulates here.
     pub(crate) scroll_accum: f32,
@@ -120,7 +125,10 @@ impl App {
         history: CommandHistory,
     ) -> Self {
         let keymap = Keymap::defaults().with_overrides(&config.keys);
+        let sidebar_visible = config.sidebar.visible;
         Self {
+            sidebar_visible,
+            last_sidebar: None,
             keymap,
             config,
             proxy,

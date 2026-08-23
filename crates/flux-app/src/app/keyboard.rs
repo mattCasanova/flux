@@ -113,6 +113,7 @@ impl App {
             Action::FocusPaneRight => self.focus_pane_direction(1, 0),
             Action::FocusPaneUp => self.focus_pane_direction(0, -1),
             Action::FocusPaneDown => self.focus_pane_direction(0, 1),
+            Action::ToggleSidebar => self.toggle_sidebar(),
         }
         true
     }
