@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "flux-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "flux-input"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dirs",
  "flux-types",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "flux-renderer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "flux-shell"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "flux-terminal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "flux-types"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitflags 2.11.0",
 ]
