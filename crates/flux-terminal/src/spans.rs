@@ -232,8 +232,16 @@ impl SpanTracker {
     /// Row identity cannot survive a reflow (alacritty drops its own
     /// selection on column changes for the same reason). The next `A`
     /// re-syncs the live prompt.
+    #[cfg(test)]
     pub fn columns_changed(&mut self) {
         self.spans.clear();
+    }
+
+    /// Install a rebuilt span list (content re-anchoring after a
+    /// column reflow). `dropped` is untouched — the new spans' rows
+    /// were computed against the current `dropped + history`.
+    pub fn replace_spans(&mut self, spans: Vec<Span>) {
+        self.spans = spans.into();
     }
 
     /// History hit its ceiling inside one feed step, so some drops went

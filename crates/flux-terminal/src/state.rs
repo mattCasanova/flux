@@ -18,6 +18,27 @@ use flux_types::{CellData, CellFlags, Color, ResolvedTheme, TerminalGrid};
 use crate::blocks::{BlockCapture, ShellPhase, StreamEvent};
 use crate::spans::{AbsRow, Span, SpanTracker};
 
+/// What a block looks like independent of row numbers — captured
+/// before a column reflow, re-located after. Reflow preserves LOGICAL
+/// lines (text between hard newlines) exactly; only the wrapping
+/// changes, so header text + logical-line counts identify a block on
+/// both sides of the resize.
+struct SpanFingerprint {
+    /// Trimmed text of the header's first logical line.
+    header_text: String,
+    /// Logical lines in the header region (multi-line prompts).
+    header_lines: usize,
+    /// Logical lines in the whole block (closed spans only).
+    total_lines: Option<usize>,
+    /// Char offset of the command echo within the first logical line.
+    echo_offset: Option<usize>,
+    exit_code: Option<i32>,
+    started_at: Option<std::time::Instant>,
+    duration: Option<std::time::Duration>,
+    /// This block held the block-selection highlight.
+    selected: bool,
+}
+
 /// Extra history rows allocated above the configured scrollback. Lines
 /// pushed into history are only observable while history is below its
 /// ceiling (alacritty drops silently at the cap), so we keep the cap
@@ -489,8 +510,21 @@ impl TerminalState {
                 .max(span.prompt_start),
         };
         let top = -(history as i64);
+        let out = self.rows_as_text(span.prompt_start..=last_abs, history, top);
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// Join a range of absolute rows into copyable text: soft-wrapped
+    /// rows concatenate (no newline, no trim — the wrap is a rendering
+    /// artifact), hard line ends get trimmed + newline.
+    fn rows_as_text(
+        &self,
+        range: std::ops::RangeInclusive<AbsRow>,
+        history: usize,
+        top: i64,
+    ) -> String {
         let mut out = String::new();
-        for abs in span.prompt_start..=last_abs {
+        for abs in range {
             let line = self.tracker.line(history, abs);
             if line < top {
                 continue;
@@ -503,11 +537,14 @@ impl TerminalState {
                     row_text.push(ch);
                 }
             }
-            out.push_str(row_text.trim_end());
-            out.push('\n');
+            if self.row_wraps(line) {
+                out.push_str(&row_text);
+            } else {
+                out.push_str(row_text.trim_end());
+                out.push('\n');
+            }
         }
-        let out = out.trim_end().to_string();
-        (!out.is_empty()).then_some(out)
+        out.trim_end().to_string()
     }
 
     /// The output text of the most recent finished block, trailing    /// The output text of the most recent finished block, trailing
@@ -523,24 +560,7 @@ impl TerminalState {
             return None;
         }
         let top = -(history as i64);
-        let mut out = String::new();
-        for abs in start..=end {
-            let line = self.tracker.line(history, abs);
-            if line < top {
-                continue; // pruned from scrollback
-            }
-            let grid_row = &self.term.grid()[Line(line as i32)];
-            let mut row_text = String::new();
-            for col in 0..self.cols {
-                let ch = grid_row[Column(col)].c;
-                if ch != '\0' {
-                    row_text.push(ch);
-                }
-            }
-            out.push_str(row_text.trim_end());
-            out.push('\n');
-        }
-        let out = out.trim_end().to_string();
+        let out = self.rows_as_text(start..=end, history, top);
         (!out.is_empty()).then_some(out)
     }
 
@@ -1450,18 +1470,172 @@ impl TerminalState {
     /// rows stay valid (regression-tested below).
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let cols_changed = cols != self.cols;
+        // A width change reflows the scrollback and scrambles row
+        // identity — capture each block's content fingerprint first,
+        // re-anchor afterwards (pain #27: blocks survive splits).
+        let fingerprints = cols_changed.then(|| self.capture_span_fingerprints());
         self.cols = cols;
         self.rows = rows;
         let dims = TermDimensions { cols, rows };
         self.term.resize(dims);
-        if cols_changed {
-            self.tracker.columns_changed();
-            // Row identity above the screen is gone; don't pull any of
-            // it into view until fresh output has scrolled past.
-            self.view_floor = self.screen_top();
-        }
         // Shrinking rows pushes lines into history — count them.
         self.settle_history();
+        if cols_changed {
+            self.view_floor = self.screen_top();
+            if let Some(fingerprints) = fingerprints {
+                self.reanchor_spans(fingerprints);
+            }
+        }
+    }
+
+    /// True when grid `line` continues onto the next row (soft wrap).
+    fn row_wraps(&self, line: i64) -> bool {
+        let row = &self.term.grid()[Line(line as i32)];
+        row[Column(self.cols.saturating_sub(1))]
+            .flags
+            .contains(alacritty_terminal::term::cell::Flags::WRAPLINE)
+    }
+
+    /// Text of the logical line starting at grid `line` (joined across
+    /// soft wraps, trailing blanks trimmed).
+    fn logical_line_text(&self, line: i64) -> String {
+        let bottom = self.rows as i64;
+        let mut text = String::new();
+        let mut l = line;
+        loop {
+            let row = &self.term.grid()[Line(l as i32)];
+            for col in 0..self.cols {
+                let ch = row[Column(col)].c;
+                if ch != '\0' {
+                    text.push(ch);
+                }
+            }
+            if l + 1 >= bottom || !self.row_wraps(l) {
+                break;
+            }
+            l += 1;
+        }
+        text.trim_end().to_string()
+    }
+
+    /// Grid line one past the end of the logical line starting at `line`.
+    fn logical_line_end(&self, line: i64) -> i64 {
+        let bottom = self.rows as i64;
+        let mut l = line;
+        while l + 1 < bottom && self.row_wraps(l) {
+            l += 1;
+        }
+        l + 1
+    }
+
+    /// Count logical-line starts in grid lines `[from, to)`.
+    fn count_logical_lines(&self, from: i64, to: i64) -> usize {
+        let mut count = 0;
+        let mut l = from;
+        while l < to {
+            count += 1;
+            l = self.logical_line_end(l);
+        }
+        count
+    }
+
+    /// Grid line after skipping `n` logical lines from `line`.
+    fn advance_logical_lines(&self, line: i64, n: usize) -> i64 {
+        let bottom = self.rows as i64;
+        let mut l = line;
+        for _ in 0..n {
+            if l >= bottom {
+                break;
+            }
+            l = self.logical_line_end(l);
+        }
+        l.min(bottom)
+    }
+
+    fn capture_span_fingerprints(&self) -> Vec<SpanFingerprint> {
+        let history = self.term.grid().history_size();
+        let top = -(history as i64);
+        let mut out = Vec::new();
+        for span in self.tracker.spans() {
+            if span.at_prompt() {
+                continue; // zle re-marks the live prompt on SIGWINCH
+            }
+            let start = self.tracker.line(history, span.prompt_start);
+            if start < top {
+                continue; // header already pruned from scrollback
+            }
+            let header_text = self.logical_line_text(start);
+            if header_text.is_empty() {
+                continue;
+            }
+            let header_end = self.tracker.line(history, span.header_end());
+            let total_lines = span.end.map(|end| {
+                let end_line = self.tracker.line(history, end).min(self.rows as i64);
+                self.count_logical_lines(start, end_line).max(1)
+            });
+            let echo_offset = span
+                .prompt_end
+                .map(|(row, col)| ((row - span.prompt_start).max(0) as usize) * self.cols + col);
+            out.push(SpanFingerprint {
+                header_text,
+                header_lines: self.count_logical_lines(start, header_end).max(1),
+                total_lines,
+                echo_offset,
+                exit_code: span.exit_code,
+                started_at: span.started_at,
+                duration: span.duration,
+                selected: self.selected_block == Some(span.prompt_start),
+            });
+        }
+        out
+    }
+
+    /// Walk the reflowed buffer top-to-bottom re-locating each
+    /// fingerprinted header in order, and rebuild the span list at the
+    /// new rows. Unfound blocks (pruned) are dropped; the block
+    /// selection follows its block.
+    fn reanchor_spans(&mut self, fingerprints: Vec<SpanFingerprint>) {
+        let history = self.term.grid().history_size();
+        let top = -(history as i64);
+        let bottom = self.rows as i64;
+        let mut new_spans: Vec<Span> = Vec::new();
+        let mut selected = None;
+        let mut scan = top;
+        for fp in fingerprints {
+            let mut found = None;
+            let mut l = scan;
+            while l < bottom {
+                if self.logical_line_text(l) == fp.header_text {
+                    found = Some(l);
+                    break;
+                }
+                l = self.logical_line_end(l);
+            }
+            let Some(start) = found else { continue };
+            let after_header = self.advance_logical_lines(start, fp.header_lines);
+            let end_line = fp.total_lines.map(|n| self.advance_logical_lines(start, n));
+            let prompt_start = self.tracker.abs(history, start as i32);
+            let prompt_end = fp.echo_offset.map(|offset| {
+                let row = (start + (offset / self.cols) as i64).min(bottom - 1);
+                (self.tracker.abs(history, row as i32), offset % self.cols)
+            });
+            let span = Span {
+                prompt_start,
+                prompt_end,
+                output_start: Some(self.tracker.abs(history, after_header as i32)),
+                end: end_line.map(|e| self.tracker.abs(history, e as i32)),
+                exit_code: fp.exit_code,
+                started_at: fp.started_at,
+                duration: fp.duration,
+            };
+            if fp.selected {
+                selected = Some(prompt_start);
+            }
+            scan = end_line.unwrap_or(after_header);
+            new_spans.push(span);
+        }
+        self.tracker.replace_spans(new_spans);
+        self.selected_block = selected;
     }
 
     /// Convert an alacritty color to our Color type.
@@ -1871,11 +2045,111 @@ mod tests {
             "after shrinking rows"
         );
 
-        // Column change reflows: spans go, tracking continues.
+        // Column change reflows: blocks survive via content
+        // re-anchoring (pain #27) — the closed span is re-located.
         state.resize(60, 12);
-        assert_eq!(state.tracker().spans().count(), 0);
+        let survivors: Vec<Span> = state.tracker().spans().copied().collect();
+        assert_eq!(
+            survivors.len(),
+            1,
+            "block survived the reflow: {survivors:?}"
+        );
+        let span = survivors[0];
+        assert!(span.is_closed());
+        assert!(
+            state
+                .debug_row_text_abs(span.prompt_start)
+                .starts_with("P> cmd")
+        );
+        assert_eq!(state.debug_row_text_abs(span.output_start.unwrap()), "out");
         cycle(&mut state, "P> ", "again", &["y"], 0);
-        assert_eq!(state.tracker().spans().count(), 1);
+        assert_eq!(state.tracker().spans().count(), 2);
+    }
+
+    /// The pain-#27 scenario: a Cmd+D split halves the width; blocks
+    /// (including one whose output line re-wraps and the selection
+    /// highlight) must survive.
+    #[test]
+    fn blocks_survive_column_reflow_with_rewrapping_and_selection() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        let long = "x".repeat(70); // one row at 80 cols, two rows at 40
+        cycle(&mut state, "~ >", "echo long", &[&long], 0);
+        cycle(&mut state, "~ >", "true", &[], 1);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        // Select the first block, then split (width 80 → 40).
+        assert!(state.select_block_step(-1));
+        assert!(state.select_block_step(-1));
+        let before = state.selected_block_text().unwrap();
+        assert!(before.starts_with("~ >echo long"), "{before:?}");
+
+        state.resize(40, 24);
+
+        let spans: Vec<Span> = state.tracker().spans().copied().collect();
+        let closed: Vec<&Span> = spans.iter().filter(|s| s.is_closed()).collect();
+        assert_eq!(closed.len(), 2, "both blocks survived: {spans:?}");
+        // First block: header re-anchored, output now wraps two rows,
+        // extent still ends before the second block.
+        let first = closed[0];
+        assert!(
+            state
+                .debug_row_text_abs(first.prompt_start)
+                .starts_with("~ >echo long")
+        );
+        let text = {
+            // block selection followed the block across the reflow
+            let sel = state.selected_block_text().expect("selection survived");
+            sel
+        };
+        assert!(text.starts_with("~ >echo long"), "{text:?}");
+        assert!(
+            text.contains(&long),
+            "full wrapped output present: {text:?}"
+        );
+        assert!(!text.contains("true"), "does not bleed into the next block");
+        // Second block: exit code + duration preserved.
+        let second = closed[1];
+        assert_eq!(second.exit_code, Some(1));
+        assert!(second.duration.is_some());
+        assert!(
+            state
+                .debug_row_text_abs(second.prompt_start)
+                .starts_with("~ >true")
+        );
+
+        // New commands keep working after the reflow.
+        cycle(&mut state, "~ >", "after", &["z"], 0);
+        assert_eq!(state.tracker().spans().filter(|s| s.is_closed()).count(), 3);
+    }
+
+    /// Two identical commands re-anchor to their own rows (sequential
+    /// matching), not both to the first occurrence.
+    #[test]
+    fn duplicate_commands_reanchor_in_order() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "~ >", "ls", &["one"], 0);
+        cycle(&mut state, "~ >", "ls", &["two"], 0);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        state.resize(60, 24);
+        let closed: Vec<Span> = state
+            .tracker()
+            .spans()
+            .filter(|s| s.is_closed())
+            .copied()
+            .collect();
+        assert_eq!(closed.len(), 2);
+        assert_ne!(closed[0].prompt_start, closed[1].prompt_start);
+        assert_eq!(
+            state.debug_row_text_abs(closed[0].output_start.unwrap()),
+            "one"
+        );
+        assert_eq!(
+            state.debug_row_text_abs(closed[1].output_start.unwrap()),
+            "two"
+        );
     }
 
     #[test]
