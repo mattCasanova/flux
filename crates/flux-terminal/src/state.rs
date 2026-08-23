@@ -481,7 +481,7 @@ impl TerminalState {
         let id = self.selected_block?;
         let span = *self.tracker.spans().find(|s| s.prompt_start == id)?;
         let history = self.term.grid().history_size();
-        let last_abs = match span.end {
+        let last_abs = match self.tracker.effective_end(&span) {
             Some(end) => (end - 1).max(span.prompt_start),
             None => self
                 .tracker
@@ -1185,7 +1185,7 @@ impl TerminalState {
         if let Some(id) = self.selected_block
             && let Some(span) = self.tracker.spans().find(|s| s.prompt_start == id).copied()
         {
-            let last = span.end.unwrap_or(hi).min(hi);
+            let last = self.tracker.effective_end(&span).unwrap_or(hi).min(hi);
             let tint = self.theme.ui.block_selected;
             for abs in span.prompt_start.max(lo)..last {
                 let row = (abs - lo) as usize;
@@ -2107,6 +2107,67 @@ mod tests {
             (0..grid.rows)
                 .any(|r| TerminalState::grid_row_text(&grid, r).starts_with("~ >ls -la /tmp"))
         );
+    }
+
+    // ---- doubled shell integration (iTerm2 alongside Flux) ----
+
+    /// Reproduces Matt's real .zshrc: iTerm2's shell integration emits
+    /// its own OSC 133 set interleaved with ours, at slightly different
+    /// cursor positions. Doubled markers must yield ONE span per
+    /// command — the second C used to mint a phantom block on the
+    /// first output row (pain #26).
+    #[test]
+    fn doubled_integration_markers_yield_one_span_per_command() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        for (cmd, output) in [("ls", vec!["deploy-scripts", "flux"]), ("cd flux/", vec![])] {
+            // Doubled prompt marks: outer (iTerm) wraps inner (Flux).
+            state.process_bytes(A);
+            state.process_bytes(A);
+            state.process_bytes(b"~ >");
+            state.process_bytes(B);
+            state.process_bytes(B);
+            state.process_bytes(cmd.as_bytes());
+            state.process_bytes(b"\r\n");
+            // Doubled command-start: ours, then iTerm's a moment later
+            // (after output may have started).
+            state.process_bytes(C);
+            if let Some(first) = output.first() {
+                state.process_bytes(format!("{first}\r\n").as_bytes());
+            }
+            state.process_bytes(C);
+            for line in output.iter().skip(1) {
+                state.process_bytes(format!("{line}\r\n").as_bytes());
+            }
+            // Doubled command-end.
+            state.process_bytes(&d(0));
+            state.process_bytes(&d(0));
+        }
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+
+        let spans: Vec<Span> = state.tracker().spans().copied().collect();
+        let closed: Vec<&Span> = spans.iter().filter(|s| s.is_closed()).collect();
+        assert_eq!(closed.len(), 2, "one span per command: {spans:?}");
+        // Every closed span's header is exactly one row (prompt+echo),
+        // and starts on a row whose text is a prompt, not output.
+        for span in &closed {
+            assert_eq!(
+                span.header_end(),
+                span.prompt_start + 1,
+                "single-row header: {span:?}"
+            );
+            let text = state.debug_row_text_abs(span.prompt_start);
+            assert!(text.starts_with("~ >"), "header on a prompt row: {text:?}");
+        }
+        // No phantom span sits on the first output row.
+        let grid = state.grid_snapshot();
+        let out_row = (0..grid.rows)
+            .find(|&r| TerminalState::grid_row_text(&grid, r) == "deploy-scripts")
+            .expect("output visible");
+        // The output row carries no duration label at its right edge.
+        let tail: String = (70..80).map(|c| grid.get(out_row, c).character).collect();
+        assert_eq!(tail.trim(), "", "no phantom label on output: {tail:?}");
     }
 
     // ---- block copy gestures ----

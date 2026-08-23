@@ -160,6 +160,12 @@ impl SpanTracker {
 
     /// OSC 133;C at `row`. Without an open prompt span (integration
     /// came alive mid-command) a header-less span starts here.
+    ///
+    /// A second C while the last span is ALREADY executing is an echo
+    /// of the same command start from a second shell integration
+    /// emitting its own OSC 133 set (iTerm2's does — dogfood 08-23,
+    /// pain #26) and is ignored; minting a span from it planted
+    /// phantom blocks on output rows.
     pub fn output_start(&mut self, row: AbsRow) {
         let now = Instant::now();
         match self.spans.back_mut() {
@@ -167,6 +173,7 @@ impl SpanTracker {
                 last.output_start = Some(row);
                 last.started_at = Some(now);
             }
+            Some(last) if !last.is_closed() => {}
             _ => {
                 let mut span = Span::new(row);
                 span.output_start = Some(row);
@@ -174,6 +181,19 @@ impl SpanTracker {
                 self.spans.push_back(span);
             }
         }
+    }
+
+    /// The row after the last row `span` owns: its recorded end, else
+    /// the next span's first row (a stale open span must not swallow
+    /// everything below it), else None (a live open span runs to the
+    /// cursor — the caller bounds it).
+    pub fn effective_end(&self, span: &Span) -> Option<AbsRow> {
+        span.end.or_else(|| {
+            self.spans
+                .iter()
+                .map(|s| s.prompt_start)
+                .find(|&start| start > span.prompt_start)
+        })
     }
 
     /// OSC 133;D at `row`. A `D` with no open span (the first precmd of
