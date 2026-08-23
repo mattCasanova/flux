@@ -15,6 +15,14 @@ use flux_input::CommandHistory;
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
+    // `--version` / `-V` prints and exits before ANY init — installers
+    // and scripts probe it; without this the probe launched a window
+    // (dogfood 08-23, found by the install.sh end-to-end test).
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("{}", version_line());
+        return Ok(());
+    }
+
     // Logging + panic hook first, so every subsequent failure leaves a
     // trail in ~/.local/state/flux/.
     logging::init()?;
@@ -36,11 +44,7 @@ fn main() -> Result<()> {
     log::info!("Loaded {} entries from shell history", shell_history.len());
     let history = CommandHistory::load(history_path, 10_000, shell_history);
 
-    println!(
-        "Flux v{} ({}) — 1.21 gigawatts",
-        env!("CARGO_PKG_VERSION"),
-        option_env!("FLUX_GIT_SHA").unwrap_or("no-git")
-    );
+    println!("{}", version_line());
 
     let event_loop = EventLoop::new()?;
     let proxy = event_loop.create_proxy();
@@ -48,4 +52,13 @@ fn main() -> Result<()> {
     event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+/// The banner: version + build SHA, self-identifying binaries.
+fn version_line() -> String {
+    format!(
+        "Flux v{} ({}) — 1.21 gigawatts",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FLUX_GIT_SHA").unwrap_or("no-git")
+    )
 }

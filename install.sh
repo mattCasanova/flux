@@ -44,7 +44,8 @@ mkdir -p "$dir"
 install -m 755 "$tmp/flux" "$dir/flux"
 
 echo "Installed: $dir/flux"
-"$dir/flux" --version 2>/dev/null || true
+# (Don't invoke the binary here: releases before v0.4.1 launch the
+# app on --version instead of printing.)
 
 case ":$PATH:" in
     *":$dir:"*) ;;
