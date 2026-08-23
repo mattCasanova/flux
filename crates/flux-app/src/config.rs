@@ -174,6 +174,12 @@ pub struct ThemeConfig {
     /// (prompt + echo rows). Derived from `background` when unset.
     #[serde(default)]
     pub block_header: Option<String>,
+    /// `[theme.ui]` — chrome color overrides by slot name (accent,
+    /// divider, selection, tab_bg, …; see default-config.toml for the
+    /// full list). Every slot has a derived default; unknown names and
+    /// bad hex values warn and are ignored.
+    #[serde(default)]
+    pub ui: std::collections::HashMap<String, String>,
 }
 
 impl ThemeConfig {
@@ -230,6 +236,20 @@ impl ThemeConfig {
         );
         theme.block_failed =
             flux_types::ResolvedTheme::derive_block_failed(theme.block_header, theme.ansi(1));
+
+        // Chrome palette: derive from the final base colors, then let
+        // [theme.ui] override individual slots.
+        theme.rederive_ui();
+        for (name, hex) in &self.ui {
+            match Color::from_hex(hex) {
+                Some(color) => {
+                    if !theme.ui.set_by_name(name, color) {
+                        log::warn!("unknown [theme.ui] key {name:?}; ignoring");
+                    }
+                }
+                None => log::warn!("invalid [theme.ui] {name} = {hex:?}; keeping default"),
+            }
+        }
 
         theme
     }
@@ -366,6 +386,53 @@ mod tests {
         assert_eq!(
             theme.background,
             flux_types::Color::from_hex("#000000").unwrap()
+        );
+    }
+
+    #[test]
+    fn theme_ui_overrides_single_slots_and_derives_the_rest() {
+        let toml_str = r##"
+            version = 1
+            [font]
+            family = "Menlo"
+            size = 14.0
+            weight = "regular"
+            style = "regular"
+            line_height = 1.2
+            [window]
+            title = "Flux"
+            width = 800
+            height = 600
+            padding_horizontal = 10.0
+            padding_vertical = 10.0
+            [theme]
+            background = "#101010"
+            foreground = "#eeeeee"
+            blue = "#3366ff"
+            [theme.ui]
+            selection = "#ff000080"
+            notice_bg = "#222222"
+            bogus_key = "#123456"
+        "##;
+        let config: FluxConfig = toml::from_str(toml_str).expect("parses");
+        let theme = config.theme.resolve();
+        // Derived: accent follows the overridden blue.
+        assert_eq!(
+            theme.ui.accent,
+            flux_types::Color::from_hex("#3366ff").unwrap()
+        );
+        // Overridden slot, with alpha from the 8-digit hex.
+        let sel = theme.ui.selection;
+        assert!((sel.r - 1.0).abs() < 0.01 && sel.g < 0.01);
+        assert!((sel.a - 0.5).abs() < 0.01);
+        assert_eq!(
+            theme.ui.notice_bg,
+            flux_types::Color::from_hex("#222222").unwrap()
+        );
+        // Untouched slot keeps its derived/default value.
+        assert_eq!(
+            theme.ui.input_text,
+            flux_types::Color::from_hex("#eeeeee").unwrap()
         );
     }
 }

@@ -23,23 +23,10 @@ pub struct PaneView {
     pub drives_clear_color: bool,
 }
 
-/// Blend the selection tint (theme blue at 30%) over a cell's
-/// background — opaque result, standard source-over.
-fn blend_selection_tint(bg: Color) -> Color {
-    const TINT: Color = Color::new(0.478, 0.635, 0.969, 1.0); // #7aa2f7
-    blend_over(bg, TINT, 0.30)
-}
-
-/// Search highlights: every match gets the yellow tint; the focused
-/// match gets the stronger orange so the eye lands on it.
-fn blend_search_tint(bg: Color, focused: bool) -> Color {
-    const MATCH: Color = Color::new(0.878, 0.686, 0.408, 1.0); // #e0af68
-    const FOCUS: Color = Color::new(1.0, 0.62, 0.39, 1.0); // #ff9e64
-    if focused {
-        blend_over(bg, FOCUS, 0.65)
-    } else {
-        blend_over(bg, MATCH, 0.35)
-    }
+/// Blend a configurable tint over a cell's background — the tint's
+/// own alpha channel is the blend strength; result is opaque.
+fn blend_tint(bg: Color, tint: Color) -> Color {
+    blend_over(bg, tint, tint.a)
 }
 
 /// Rows to shift a bottom-anchored grid down by.
@@ -269,7 +256,7 @@ impl Renderer {
         {
             let cursor_x = pad_x + col as f32 * cell_w;
             let cursor_y = pad_y + row as f32 * cell_h + y_shift;
-            let cursor_color = Color::from_hex("#c0caf5").unwrap_or_default();
+            let cursor_color = self.ui.cursor;
             instances.push(CellInstance {
                 position: [cursor_x, cursor_y],
                 size: [cell_w, cell_h],
@@ -307,9 +294,13 @@ impl Renderer {
                 // content-anchored selection, so it's already correct
                 // for scrolled viewports.
                 let cell_bg = if cell.flags.contains(CellFlags::SEARCH_MATCH) {
-                    blend_search_tint(cell.bg, cell.flags.contains(CellFlags::SEARCH_FOCUS))
+                    if cell.flags.contains(CellFlags::SEARCH_FOCUS) {
+                        blend_tint(cell.bg, self.ui.search_focus)
+                    } else {
+                        blend_tint(cell.bg, self.ui.search_match)
+                    }
                 } else if cell.flags.contains(CellFlags::SELECTION) {
-                    blend_selection_tint(cell.bg)
+                    blend_tint(cell.bg, self.ui.selection)
                 } else {
                     cell.bg
                 };
@@ -353,10 +344,7 @@ impl Renderer {
                 // When the shell cursor sits on a glyph, invert its colors so it
                 // reads against the cursor block (already pushed above).
                 let (fg, bg) = if is_under_cursor {
-                    let cursor_bg =
-                        Color::from_hex("#24283b").unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
-                    let cursor_fg = Color::from_hex("#c0caf5").unwrap_or_default();
-                    (cursor_bg, cursor_fg)
+                    (self.ui.cursor_text, self.ui.cursor)
                 } else {
                     (cell.fg, cell_bg)
                 };
@@ -377,14 +365,14 @@ impl Renderer {
         // edge while the block's own header rows are scrolled off.
         if let Some(sticky) = &grid.sticky_header {
             let bar_bg = if sticky.failed {
-                Color::new(0.30, 0.16, 0.20, 0.96)
+                self.ui.sticky_failed_bg
             } else {
-                Color::new(0.14, 0.16, 0.26, 0.96)
+                self.ui.sticky_bg
             };
             let fg = if sticky.failed {
-                Color::new(0.97, 0.46, 0.56, 1.0) // theme red-ish
+                self.ui.sticky_failed_text
             } else {
-                Color::new(0.75, 0.79, 0.96, 1.0)
+                self.ui.sticky_text
             };
             let width = grid.cols as f32 * cell_w;
             instances.push(CellInstance {
@@ -406,7 +394,7 @@ impl Renderer {
                     continue;
                 }
                 let color = if i < marker.chars().count() {
-                    Color::new(0.478, 0.635, 0.969, 1.0)
+                    self.ui.accent
                 } else {
                     fg
                 };

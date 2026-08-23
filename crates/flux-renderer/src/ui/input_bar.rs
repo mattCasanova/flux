@@ -7,7 +7,6 @@
 
 use crate::core::CellInstance;
 use crate::renderer::Renderer;
-use flux_types::Color;
 
 /// Prompt prefix for line 0.
 const PROMPT: &str = "❯ ";
@@ -51,12 +50,12 @@ impl Renderer {
         let mut instances = std::mem::take(&mut self.input_instances);
         instances.clear();
 
-        let divider_color = Color::new(0.30, 0.33, 0.45, 1.0);
-        let prompt_color = Color::from_hex("#7aa2f7").unwrap_or_default();
-        let fg_color = Color::from_hex("#c0caf5").unwrap_or_default();
-        let dim_color = Color::from_hex("#6a7099").unwrap_or_default();
-        let bg_color = Color::from_hex("#24283b").unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
-        let cursor_color = Color::from_hex("#c0caf5").unwrap_or_default();
+        let divider_color = self.ui.divider;
+        let prompt_color = self.ui.accent;
+        let fg_color = self.ui.input_text;
+        let dim_color = self.ui.input_dim;
+        let bg_color = self.clear_color;
+        let cursor_color = self.ui.cursor;
 
         for bar in bars {
             let [bar_x, bar_y] = bar.origin;
@@ -147,7 +146,7 @@ impl Renderer {
                     }
                     let is_under_cursor = cursor_here.is_some_and(|(_, col)| col == i);
                     let (fg, bg) = if is_under_cursor {
-                        (bg_color, cursor_color)
+                        (self.ui.cursor_text, cursor_color)
                     } else {
                         (text_fg, bg_color)
                     };

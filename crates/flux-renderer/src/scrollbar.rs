@@ -11,11 +11,6 @@ use crate::output::PaneView;
 use crate::renderer::Renderer;
 use flux_types::{Color, TerminalGrid};
 
-/// Thumb and track colors — cool gray at two alphas, matching the
-/// divider's palette. Becomes a theme key when F16 lands.
-const THUMB: Color = Color::new(0.60, 0.65, 0.80, 0.55);
-const TRACK: Color = Color::new(0.60, 0.65, 0.80, 0.10);
-
 impl Renderer {
     pub(crate) fn set_scrollbar(&mut self, pane_id: u64, grid: &TerminalGrid, view: PaneView) {
         let mut instances = self.pane_scrollbars.remove(&pane_id).unwrap_or_default();
@@ -52,8 +47,8 @@ impl Renderer {
                 fg_color: [c.r, c.g, c.b, c.a],
                 bg_color: [c.r, c.g, c.b, c.a],
             };
-            instances.push(rect(x, area_y, width, area_h, TRACK));
-            instances.push(rect(x, thumb_y, width, thumb_h, THUMB));
+            instances.push(rect(x, area_y, width, area_h, self.ui.scrollbar_track));
+            instances.push(rect(x, thumb_y, width, thumb_h, self.ui.scrollbar_thumb));
         }
 
         self.pane_scrollbars.insert(pane_id, instances);

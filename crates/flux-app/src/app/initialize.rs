@@ -174,9 +174,9 @@ impl App {
             self.default_glyph_style(),
         )?;
 
-        if let Some(bg) = Color::from_hex(&self.config.theme.background) {
-            renderer.set_clear_color(bg);
-        }
+        let resolved = self.config.theme.resolve();
+        renderer.set_clear_color(resolved.background);
+        renderer.set_ui_theme(resolved.ui.clone());
 
         let policy = match self.config.theme.alt_screen_background.as_deref() {
             None | Some("sync") => flux_renderer::AltBgPolicy::Sync,

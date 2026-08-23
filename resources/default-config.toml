@@ -91,6 +91,25 @@ bright_white   = "#e0e6ff"
 #   "#rrggbb"   pin to any fixed color
 # alt_screen_background = "sync"
 
+[theme.ui]
+# Every chrome color, individually overridable. Defaults derive from
+# the palette above (accent = blue, dim = bright_black, …), so most
+# themes only need [theme]; set keys here to override single slots.
+# 8-digit hex sets alpha where it matters (selection, search tints,
+# scrollbar, sticky header backgrounds).
+#   accent, divider, cursor, cursor_text,
+#   selection, search_match, search_focus,
+#   scrollbar_thumb, scrollbar_track,
+#   tab_bg, tab_text, tab_focused_bg, tab_focused_text,
+#   input_text, input_dim,
+#   popup_bg, popup_selected_bg, popup_directory, popup_file, popup_symlink,
+#   notice_bg, notice_text,
+#   sticky_bg, sticky_failed_bg, sticky_text, sticky_failed_text,
+#   pane_accent
+# Examples:
+# accent    = "#ff9e64"
+# selection = "#7aa2f74d"   # last byte = opacity
+
 [scrollback]
 # Scrollback capacity in lines. 0 disables history entirely.
 # Memory cost is roughly proportional (~100 bytes/line-cell row).

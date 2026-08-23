@@ -5,7 +5,6 @@
 
 use crate::core::CellInstance;
 use crate::renderer::Renderer;
-use flux_types::Color;
 
 /// Candidate kind for popup rendering — determines the text color.
 #[derive(Copy, Clone, Debug)]
@@ -57,11 +56,11 @@ impl Renderer {
         let popup_top_y = anchor_row_y - (popup_row_count as f32) * cell_h;
         let popup_left_x = pad_x + (anchor_col as f32) * cell_w;
 
-        let bg_normal = Color::from_hex("#1f2335").unwrap_or_default();
-        let bg_selected = Color::from_hex("#3b4261").unwrap_or_default();
-        let fg_dir = Color::from_hex("#7aa2f7").unwrap_or_default();
-        let fg_file = Color::from_hex("#c0caf5").unwrap_or_default();
-        let fg_symlink = Color::from_hex("#bb9af7").unwrap_or_default();
+        let bg_normal = self.ui.popup_bg;
+        let bg_selected = self.ui.popup_selected_bg;
+        let fg_dir = self.ui.popup_directory;
+        let fg_file = self.ui.popup_file;
+        let fg_symlink = self.ui.popup_symlink;
 
         for (row_idx, (name, kind)) in candidates.iter().enumerate() {
             let y = popup_top_y + (row_idx as f32) * cell_h;
@@ -131,10 +130,10 @@ impl Renderer {
         let width_cols = text.chars().count().max(24);
         let left_x = (window_w - self.padding_x - width_cols as f32 * cell_w).max(0.0);
 
-        let bg = Color::from_hex("#1f2335").unwrap_or_default();
-        let fg = Color::from_hex("#c0caf5").unwrap_or_default();
-        let accent = Color::from_hex("#e0af68").unwrap_or_default();
-        let dim = Color::from_hex("#6a7099").unwrap_or_default();
+        let bg = self.ui.popup_bg;
+        let fg = self.ui.input_text;
+        let accent = self.ui.search_match;
+        let dim = self.ui.input_dim;
 
         instances.push(CellInstance {
             position: [left_x, top_y],
@@ -190,8 +189,8 @@ impl Renderer {
         let text = format!(" {text} ");
         let width = text.chars().count() as f32 * cell_w;
         let left_x = ((window_w - width) * 0.5).max(0.0);
-        let bg = Color::from_hex("#3b2f2f").unwrap_or_default();
-        let fg = Color::from_hex("#f7768e").unwrap_or_default();
+        let bg = self.ui.notice_bg;
+        let fg = self.ui.notice_text;
         instances.push(CellInstance {
             position: [left_x, top_y],
             size: [width, cell_h],

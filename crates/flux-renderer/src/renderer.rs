@@ -107,6 +107,9 @@ pub struct Renderer {
     /// The committed alt-screen padding color. None = no stable
     /// majority yet → fall back to the theme background.
     pub(crate) alt_bg_committed: Option<Color>,
+    /// Chrome palette — every UI color the renderer paints, resolved
+    /// from `[theme]` + `[theme.ui]`. See `flux_types::UiColors`.
+    pub(crate) ui: flux_types::UiColors,
     /// Default glyph style applied to cells with no bold/italic flags.
     /// Driven by `[font] weight = "bold"` / `style = "italic"` in the config
     /// file, so users can set a baseline weight the whole terminal inherits.
@@ -186,6 +189,7 @@ impl Renderer {
             padding_y: 0.0,
             bottom_anchor: true,
             show_shell_cursor: false,
+            ui: flux_types::ResolvedTheme::default().ui,
             default_style,
         })
     }
@@ -260,8 +264,8 @@ impl Renderer {
         gutters: &[flux_types::Rect],
         focused: Option<flux_types::Rect>,
     ) {
-        let divider = Color::new(0.30, 0.33, 0.45, 1.0);
-        let accent = Color::new(0.478, 0.635, 0.969, 0.9);
+        let divider = self.ui.divider;
+        let accent = self.ui.pane_accent;
         let rect = |r: flux_types::Rect, c: Color| CellInstance {
             position: [r.x, r.y],
             size: [r.width, r.height],
@@ -327,6 +331,11 @@ impl Renderer {
         self.gpu
             .queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+    }
+
+    /// Install the resolved chrome palette.
+    pub fn set_ui_theme(&mut self, ui: flux_types::UiColors) {
+        self.ui = ui;
     }
 
     pub fn set_clear_color(&mut self, color: Color) {

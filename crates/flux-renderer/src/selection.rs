@@ -7,11 +7,7 @@
 
 use crate::core::CellInstance;
 use crate::renderer::Renderer;
-use flux_types::{Color, Selection};
-
-/// Selection tint — theme blue at 30% alpha. Becomes
-/// `theme.ui.selection_bg` when F16 lands.
-const SELECTION_TINT: Color = Color::new(0.478, 0.635, 0.969, 0.30); // #7aa2f7
+use flux_types::Selection;
 
 impl Renderer {
     /// Rebuild the selection overlay. Pass `None` to clear. Cell
@@ -25,7 +21,7 @@ impl Renderer {
             let cell_w = self.atlas.cell_width;
             let cell_h = self.atlas.cell_height;
             let y_shift = self.current_y_shift_rows() as f32 * cell_h;
-            let tint = SELECTION_TINT;
+            let tint = self.ui.selection;
 
             for pos in sel.cells(grid_cols) {
                 let x = self.padding_x + pos.col as f32 * cell_w;

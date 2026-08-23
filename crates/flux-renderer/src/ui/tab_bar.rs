@@ -11,13 +11,6 @@ use crate::core::CellInstance;
 use crate::renderer::Renderer;
 use flux_types::Color;
 
-/// Colors match the input bar's fixed palette until F16 themes land.
-const BAR_BG: Color = Color::new(0.10, 0.11, 0.17, 1.0);
-const TAB_FG: Color = Color::new(0.55, 0.60, 0.75, 1.0);
-const FOCUSED_BG: Color = Color::new(0.16, 0.18, 0.28, 1.0);
-const FOCUSED_FG: Color = Color::new(0.478, 0.635, 0.969, 1.0); // #7aa2f7
-const SEPARATOR: Color = Color::new(0.30, 0.33, 0.45, 0.6);
-
 impl Renderer {
     /// Height of the tab bar in pixels when `count` tabs exist.
     pub fn tab_bar_height(&self, count: usize) -> f32 {
@@ -43,6 +36,12 @@ impl Renderer {
         instances.clear();
 
         if titles.len() > 1 {
+            let bar_bg = self.ui.tab_bg;
+            let tab_fg = self.ui.tab_text;
+            let focused_bg = self.ui.tab_focused_bg;
+            let focused_fg = self.ui.tab_focused_text;
+            let separator =
+                Color::new(self.ui.divider.r, self.ui.divider.g, self.ui.divider.b, 0.6);
             let cell_w = self.atlas.cell_width;
             let cell_h = self.atlas.cell_height;
             let baseline = self.atlas.baseline_offset;
@@ -52,15 +51,15 @@ impl Renderer {
             let slot_w = window_w / n as f32;
 
             // Full-width bar background.
-            instances.push(rect(0.0, 0.0, window_w, cell_h, BAR_BG));
+            instances.push(rect(0.0, 0.0, window_w, cell_h, bar_bg));
 
             for (idx, title) in titles.iter().enumerate() {
                 let slot_x = idx as f32 * slot_w;
                 let is_focused = idx == focused;
                 let (fg, bg) = if is_focused {
-                    (FOCUSED_FG, FOCUSED_BG)
+                    (focused_fg, focused_bg)
                 } else {
-                    (TAB_FG, BAR_BG)
+                    (tab_fg, bar_bg)
                 };
                 if is_focused {
                     instances.push(rect(slot_x, 0.0, slot_w, cell_h, bg));
@@ -96,7 +95,7 @@ impl Renderer {
                         cell_h * 0.2,
                         1.0,
                         cell_h * 0.6,
-                        SEPARATOR,
+                        separator,
                     ));
                 }
             }

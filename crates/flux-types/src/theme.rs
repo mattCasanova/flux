@@ -8,6 +8,136 @@
 
 use crate::Color;
 
+/// Every chrome color the renderer paints — resolved, with one field
+/// per knob so a config key (or, later, a theme-editing UI) can
+/// override each individually. Defaults derive from the base palette
+/// where a relationship is natural (accent = blue, dim = bright
+/// black) and are fixed values matching the shipped look otherwise.
+/// Alpha matters on the blend tints (selection, search) and the
+/// scrollbar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiColors {
+    /// The one accent: prompt ❯, focused tab text, pane accent,
+    /// sticky-header marker.
+    pub accent: Color,
+    /// Thin rules: input-bar divider, tab separators, split dividers.
+    pub divider: Color,
+    /// Shell cursor block (raw/passthrough modes) and the input bar's
+    /// block cursor.
+    pub cursor: Color,
+    /// Glyph color drawn INSIDE the cursor block.
+    pub cursor_text: Color,
+    /// Selection tint blended over cell backgrounds (alpha applies).
+    pub selection: Color,
+    /// Search match tint (alpha applies).
+    pub search_match: Color,
+    /// Focused search match tint (alpha applies).
+    pub search_focus: Color,
+    pub scrollbar_thumb: Color,
+    pub scrollbar_track: Color,
+    pub tab_bg: Color,
+    pub tab_text: Color,
+    pub tab_focused_bg: Color,
+    pub tab_focused_text: Color,
+    /// Input bar text (focused pane).
+    pub input_text: Color,
+    /// Input bar text on unfocused panes; also secondary UI text.
+    pub input_dim: Color,
+    pub popup_bg: Color,
+    pub popup_selected_bg: Color,
+    pub popup_directory: Color,
+    pub popup_file: Color,
+    pub popup_symlink: Color,
+    pub notice_bg: Color,
+    pub notice_text: Color,
+    pub sticky_bg: Color,
+    pub sticky_failed_bg: Color,
+    pub sticky_text: Color,
+    pub sticky_failed_text: Color,
+    pub pane_accent: Color,
+}
+
+impl UiColors {
+    /// Derive the full chrome palette from the base theme. Called
+    /// after base-color overrides so a custom background/blue flows
+    /// into the chrome automatically; individual `[theme.ui]` keys
+    /// then override single slots.
+    pub fn derive(ansi: &[Color; 16], foreground: Color, background: Color, cursor: Color) -> Self {
+        let hex = |s: &str| Color::from_hex(s).expect("built-in ui hex is valid");
+        let accent = ansi[4];
+        Self {
+            accent,
+            divider: hex("#4d5473"),
+            cursor,
+            cursor_text: background,
+            selection: with_alpha(accent, 0.30),
+            search_match: with_alpha(ansi[3], 0.35),
+            search_focus: with_alpha(hex("#ff9e64"), 0.65),
+            scrollbar_thumb: Color::new(0.60, 0.65, 0.80, 0.55),
+            scrollbar_track: Color::new(0.60, 0.65, 0.80, 0.10),
+            tab_bg: Color::new(0.10, 0.11, 0.17, 1.0),
+            tab_text: Color::new(0.55, 0.60, 0.75, 1.0),
+            tab_focused_bg: Color::new(0.16, 0.18, 0.28, 1.0),
+            tab_focused_text: accent,
+            input_text: foreground,
+            input_dim: ansi[8],
+            popup_bg: hex("#1f2335"),
+            popup_selected_bg: hex("#3b4261"),
+            popup_directory: accent,
+            popup_file: foreground,
+            popup_symlink: ansi[5],
+            notice_bg: hex("#3b2f2f"),
+            notice_text: ansi[1],
+            sticky_bg: Color::new(0.14, 0.16, 0.26, 0.96),
+            sticky_failed_bg: Color::new(0.30, 0.16, 0.20, 0.96),
+            sticky_text: Color::new(0.75, 0.79, 0.96, 1.0),
+            sticky_failed_text: Color::new(0.97, 0.46, 0.56, 1.0),
+            pane_accent: with_alpha(accent, 0.9),
+        }
+    }
+
+    /// Override one slot by its config key name. Unknown names return
+    /// false so the caller can warn.
+    pub fn set_by_name(&mut self, name: &str, color: Color) -> bool {
+        let slot = match name {
+            "accent" => &mut self.accent,
+            "divider" => &mut self.divider,
+            "cursor" => &mut self.cursor,
+            "cursor_text" => &mut self.cursor_text,
+            "selection" => &mut self.selection,
+            "search_match" => &mut self.search_match,
+            "search_focus" => &mut self.search_focus,
+            "scrollbar_thumb" => &mut self.scrollbar_thumb,
+            "scrollbar_track" => &mut self.scrollbar_track,
+            "tab_bg" => &mut self.tab_bg,
+            "tab_text" => &mut self.tab_text,
+            "tab_focused_bg" => &mut self.tab_focused_bg,
+            "tab_focused_text" => &mut self.tab_focused_text,
+            "input_text" => &mut self.input_text,
+            "input_dim" => &mut self.input_dim,
+            "popup_bg" => &mut self.popup_bg,
+            "popup_selected_bg" => &mut self.popup_selected_bg,
+            "popup_directory" => &mut self.popup_directory,
+            "popup_file" => &mut self.popup_file,
+            "popup_symlink" => &mut self.popup_symlink,
+            "notice_bg" => &mut self.notice_bg,
+            "notice_text" => &mut self.notice_text,
+            "sticky_bg" => &mut self.sticky_bg,
+            "sticky_failed_bg" => &mut self.sticky_failed_bg,
+            "sticky_text" => &mut self.sticky_text,
+            "sticky_failed_text" => &mut self.sticky_failed_text,
+            "pane_accent" => &mut self.pane_accent,
+            _ => return false,
+        };
+        *slot = color;
+        true
+    }
+}
+
+fn with_alpha(color: Color, alpha: f32) -> Color {
+    Color::new(color.r, color.g, color.b, alpha)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTheme {
     /// ANSI colors 0–15: black, red, green, yellow, blue, magenta,
@@ -23,6 +153,9 @@ pub struct ResolvedTheme {
     /// Header tint for a command that exited nonzero. Derived from
     /// `block_header` and the red ANSI slot.
     pub block_failed: Color,
+    /// Every chrome color (input bar, tabs, popups, …). Derived from
+    /// the base palette; each slot overridable via `[theme.ui]`.
+    pub ui: UiColors,
 }
 
 impl ResolvedTheme {
@@ -51,6 +184,11 @@ impl ResolvedTheme {
     pub fn rederive_block_colors(&mut self) {
         self.block_header = Self::derive_block_header(self.background, self.foreground);
         self.block_failed = Self::derive_block_failed(self.block_header, self.ansi(1));
+    }
+
+    /// Recompute the chrome palette from the current base colors.
+    pub fn rederive_ui(&mut self) {
+        self.ui = UiColors::derive(&self.ansi, self.foreground, self.background, self.cursor);
     }
 }
 
@@ -92,8 +230,15 @@ impl Default for ResolvedTheme {
             cursor: hex("#c0caf5"),
             block_header: Color::default(),
             block_failed: Color::default(),
+            ui: UiColors::derive(
+                &[Color::default(); 16],
+                Color::default(),
+                Color::default(),
+                Color::default(),
+            ),
         };
         theme.rederive_block_colors();
+        theme.rederive_ui();
         theme
     }
 }

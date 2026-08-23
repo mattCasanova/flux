@@ -9,7 +9,7 @@ use bitflags::bitflags;
 mod selection;
 mod theme;
 pub use selection::{CellPos, Selection, SelectionMode};
-pub use theme::ResolvedTheme;
+pub use theme::{ResolvedTheme, UiColors};
 
 /// Platform-agnostic RGBA color.
 /// All color values are 0.0 to 1.0.
