@@ -29,6 +29,7 @@ pub enum Action {
     Tab(u8),
     Find,
     Copy,
+    CopyBlockOutput,
     Paste,
     Undo,
     Redo,
@@ -74,7 +75,7 @@ impl Action {
     /// would steal keys vim wants (PageUp!), so they only fire at the
     /// prompt; clipboard, find and tabs work everywhere.
     pub fn allowed_in_raw(self) -> bool {
-        self.is_global() || matches!(self, Action::Copy | Action::Paste)
+        self.is_global() || matches!(self, Action::Copy | Action::CopyBlockOutput | Action::Paste)
     }
 
     fn name(self) -> String {
@@ -86,6 +87,7 @@ impl Action {
             Action::Tab(n) => format!("tab_{n}"),
             Action::Find => "find".into(),
             Action::Copy => "copy".into(),
+            Action::CopyBlockOutput => "copy_block_output".into(),
             Action::Paste => "paste".into(),
             Action::Undo => "undo".into(),
             Action::Redo => "redo".into(),
@@ -113,6 +115,7 @@ impl Action {
             "prev_tab" => Action::PrevTab,
             "find" => Action::Find,
             "copy" => Action::Copy,
+            "copy_block_output" => Action::CopyBlockOutput,
             "paste" => Action::Paste,
             "undo" => Action::Undo,
             "redo" => Action::Redo,
@@ -149,6 +152,7 @@ impl Action {
             Action::PrevTab,
             Action::Find,
             Action::Copy,
+            Action::CopyBlockOutput,
             Action::Paste,
             Action::Undo,
             Action::Redo,
@@ -322,6 +326,7 @@ impl Keymap {
         }
         bind(Action::Find, format!("{primary}+f"));
         bind(Action::Copy, format!("{primary}+c"));
+        bind(Action::CopyBlockOutput, format!("{edit}+shift+c"));
         bind(Action::Paste, format!("{primary}+v"));
         bind(Action::Undo, format!("{edit}+z"));
         bind(Action::Redo, format!("{edit}+shift+z"));

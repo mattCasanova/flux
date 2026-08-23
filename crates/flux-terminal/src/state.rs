@@ -376,6 +376,85 @@ impl TerminalState {
         (!text.is_empty()).then_some(text)
     }
 
+    /// Select the whole block (header + output) whose header row is at
+    /// viewport `row` — the double-click-header gesture. The selection
+    /// is alacritty's content-anchored Lines selection, so it survives
+    /// scrolling and `selection_text` / Cmd+C work on it. Returns false
+    /// when the row isn't a block header.
+    pub fn select_block_at_row(&mut self, row: usize) -> bool {
+        if !self.blocks_enabled || self.is_alt_screen() {
+            return false;
+        }
+        let history = self.term.grid().history_size();
+        let offset = self.display_offset() + self.view_bump;
+        let abs = self.tracker.abs(history, row as i32 - offset as i32);
+        let Some(span) = self
+            .tracker
+            .spans()
+            .find(|s| !s.at_prompt() && s.prompt_start <= abs && abs < s.header_end())
+            .copied()
+        else {
+            return false;
+        };
+        let last_abs = match span.end {
+            // `end` is one past the last output row.
+            Some(end) => (end - 1).max(span.prompt_start),
+            // Still running: select through the current cursor row.
+            None => self
+                .tracker
+                .abs(history, self.term.grid().cursor.point.line.0)
+                .max(span.prompt_start),
+        };
+        let start_line = self.tracker.line(history, span.prompt_start);
+        let end_line = self.tracker.line(history, last_abs);
+        // Clamp to what scrollback still holds.
+        let top = -(history as i64);
+        if end_line < top {
+            return false;
+        }
+        let start_line = start_line.max(top);
+        let start = Point::new(Line(start_line as i32), Column(0));
+        let end = Point::new(Line(end_line as i32), Column(self.cols.saturating_sub(1)));
+        let mut selection = Selection::new(SelectionType::Lines, start, Side::Left);
+        selection.update(end, Side::Right);
+        self.term.selection = Some(selection);
+        true
+    }
+
+    /// The output text of the most recent finished block, trailing
+    /// whitespace trimmed per line — Cmd+Shift+C's "copy what just
+    /// happened" without a selection. None when there is no finished
+    /// block or its rows have left scrollback.
+    pub fn last_block_output(&self) -> Option<String> {
+        let history = self.term.grid().history_size();
+        let span = *self.tracker.spans().rev().find(|s| s.is_closed())?;
+        let start = span.output_start?;
+        let end = (span.end? - 1).max(start);
+        if end < start || span.end? <= start {
+            return None;
+        }
+        let top = -(history as i64);
+        let mut out = String::new();
+        for abs in start..=end {
+            let line = self.tracker.line(history, abs);
+            if line < top {
+                continue; // pruned from scrollback
+            }
+            let grid_row = &self.term.grid()[Line(line as i32)];
+            let mut row_text = String::new();
+            for col in 0..self.cols {
+                let ch = grid_row[Column(col)].c;
+                if ch != '\0' {
+                    row_text.push(ch);
+                }
+            }
+            out.push_str(row_text.trim_end());
+            out.push('\n');
+        }
+        let out = out.trim_end().to_string();
+        (!out.is_empty()).then_some(out)
+    }
+
     /// Scroll so the previous (`-1`) / next (`+1`) block header sits at
     /// the top of the viewport. Returns false when there is none.
     pub fn scroll_to_block(&mut self, step: i32) -> bool {
@@ -1913,6 +1992,50 @@ mod tests {
             (0..grid.rows)
                 .any(|r| TerminalState::grid_row_text(&grid, r).starts_with("~ >ls -la /tmp"))
         );
+    }
+
+    // ---- block copy gestures ----
+
+    #[test]
+    fn select_block_at_row_selects_command_and_output() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "~ >", "ls", &["a", "b"], 0);
+        cycle(&mut state, "~ >", "true", &[], 0);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        let grid = state.grid_snapshot();
+        let header_row = (0..grid.rows)
+            .find(|&r| TerminalState::grid_row_text(&grid, r).starts_with("~ >ls"))
+            .expect("ls header visible");
+        assert!(state.select_block_at_row(header_row));
+        let text = state.selection_text().expect("block selected");
+        assert!(text.starts_with("~ >ls"), "{text:?}");
+        assert!(
+            text.contains("\na\n") && text.trim_end().ends_with('b'),
+            "{text:?}"
+        );
+        assert!(
+            !state.select_block_at_row(header_row + 1),
+            "output rows are not the double-click target"
+        );
+    }
+
+    #[test]
+    fn last_block_output_returns_exactly_the_output() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        cycle(&mut state, "~ >", "printf hi", &["hi there", "line 2"], 0);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+        assert_eq!(
+            state.last_block_output().as_deref(),
+            Some("hi there\nline 2")
+        );
+        // A finished block with no output yields None, falling back to
+        // the previous block is NOT wanted (copy what just happened).
+        cycle(&mut state, "~ >", "true", &[], 0);
+        assert_eq!(state.last_block_output(), None);
     }
 
     // ---- sticky header + duration (v0.3b) ----

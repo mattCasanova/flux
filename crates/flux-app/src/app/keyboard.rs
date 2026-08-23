@@ -84,6 +84,7 @@ impl App {
                 }
             }
             Action::Copy => return self.handle_copy(),
+            Action::CopyBlockOutput => return self.copy_last_block_output(),
             Action::Paste => self.handle_paste(),
             Action::Undo | Action::Redo => {
                 if action == Action::Undo {

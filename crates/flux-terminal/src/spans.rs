@@ -120,7 +120,7 @@ impl SpanTracker {
         self.dropped
     }
 
-    pub fn spans(&self) -> impl Iterator<Item = &Span> {
+    pub fn spans(&self) -> impl DoubleEndedIterator<Item = &Span> {
         self.spans.iter()
     }
 

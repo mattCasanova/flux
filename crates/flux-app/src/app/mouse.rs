@@ -290,6 +290,18 @@ impl App {
         };
         let right_side = self.pointer_in_right_half(pos);
 
+        // Double-click on a block HEADER selects the whole block
+        // (command + output) — Cmd+C then copies it. Elsewhere,
+        // double-click keeps its word-select meaning.
+        if self.mouse.click_count == 2
+            && let Some(pane) = self.pane_mut()
+            && pane.terminal.select_block_at_row(cell.row)
+        {
+            self.update_display();
+            self.request_redraw();
+            return;
+        }
+
         let base_mode = match self.mouse.click_count {
             2 => SelectMode::Word,
             3 => SelectMode::Line,

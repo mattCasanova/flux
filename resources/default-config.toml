@@ -141,6 +141,7 @@ enabled = true
 # tab_1            = "cmd+1"      # … through tab_9
 # find             = "cmd+f"
 # copy             = "cmd+c"      # copies when text is selected
+# copy_block_output = "cmd+shift+c"  # last finished block's output
 # paste            = "cmd+v"
 # undo             = "cmd+z"
 # redo             = "cmd+shift+z"

@@ -22,7 +22,7 @@ impl App {
         true
     }
 
-    fn set_clipboard_text(&mut self, text: String) {
+    pub(super) fn set_clipboard_text(&mut self, text: String) {
         if self.clipboard.is_none() {
             match Clipboard::new() {
                 Ok(cb) => self.clipboard = Some(cb),
@@ -95,5 +95,15 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Copy the most recent finished block's output — no selection
+    /// needed (Cmd+Shift+C). Returns false when there is none.
+    pub(super) fn copy_last_block_output(&mut self) -> bool {
+        let Some(text) = self.terminal().and_then(|t| t.last_block_output()) else {
+            return false;
+        };
+        self.set_clipboard_text(text);
+        true
     }
 }
