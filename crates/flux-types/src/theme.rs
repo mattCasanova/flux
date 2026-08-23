@@ -47,7 +47,7 @@ pub struct UiColors {
     /// Running-command indicator dot in the sidebar.
     pub sidebar_running: Color,
     /// Custom titlebar strip (macOS unified chrome). Defaults to the
-    /// sidebar panel color so the chrome reads as one region.
+    /// main terminal background so the window reads as one surface.
     pub titlebar_bg: Color,
     /// Input bar text (focused pane).
     pub input_text: Color,
@@ -91,7 +91,7 @@ impl UiColors {
             tab_focused_bg: Color::new(0.16, 0.18, 0.28, 1.0),
             tab_focused_text: accent,
             sidebar_running: ansi[2],
-            titlebar_bg: Color::new(0.10, 0.11, 0.17, 1.0),
+            titlebar_bg: background,
             input_text: foreground,
             input_dim: ansi[8],
             popup_bg: hex("#1f2335"),
