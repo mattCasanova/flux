@@ -1,9 +1,10 @@
 //! Per-pane input bars — the prompt area at the bottom of each cooked
-//! pane (per-split input, 2026-08-23). Each bar renders a divider row,
-//! `❯ ` prompt prefix (with `  ` continuation indent for multi-line),
-//! the pane's editor buffer, and — on the focused pane only — the
-//! block cursor. Unfocused bars draw dim. Alt-screen panes have no bar
-//! (their pane's chrome_rows is 0).
+//! pane (per-split input, 2026-08-23). Claude-style box: a rule above
+//! AND below the editor lines, so the input reads as its own region
+//! with breathing room before the window edge. `❯ ` prompt prefix
+//! (`  ` continuation indent for multi-line); the focused pane's bar
+//! carries the block cursor, unfocused bars draw dim. Alt-screen panes
+//! have no bar (their pane's chrome_rows is 0).
 
 use crate::core::CellInstance;
 use crate::renderer::Renderer;
@@ -63,25 +64,34 @@ impl Renderer {
             let lines: Vec<&str> = bar.text.split('\n').collect();
             let max_cols = (bar.width / cell_w) as usize;
 
-            // Divider — dim thin horizontal rule across the pane.
+            // Rules above and below the editor lines — the input reads
+            // as a bordered box (Claude-style).
             let divider_thickness = 1.0;
-            instances.push(CellInstance {
-                position: [bar_x, bar_y + cell_h * 0.5 - divider_thickness * 0.5],
-                size: [bar.width.max(0.0), divider_thickness],
-                glyph_uv: [0.0, 0.0, 0.0, 0.0],
-                fg_color: [
-                    divider_color.r,
-                    divider_color.g,
-                    divider_color.b,
-                    divider_color.a,
-                ],
-                bg_color: [
-                    divider_color.r,
-                    divider_color.g,
-                    divider_color.b,
-                    divider_color.a,
-                ],
-            });
+            let line_count = lines.len().max(1);
+            let rule = |y: f32, instances: &mut Vec<CellInstance>| {
+                instances.push(CellInstance {
+                    position: [bar_x, y - divider_thickness * 0.5],
+                    size: [bar.width.max(0.0), divider_thickness],
+                    glyph_uv: [0.0, 0.0, 0.0, 0.0],
+                    fg_color: [
+                        divider_color.r,
+                        divider_color.g,
+                        divider_color.b,
+                        divider_color.a,
+                    ],
+                    bg_color: [
+                        divider_color.r,
+                        divider_color.g,
+                        divider_color.b,
+                        divider_color.a,
+                    ],
+                });
+            };
+            rule(bar_y + cell_h * 0.5, &mut instances);
+            rule(
+                bar_y + (1 + line_count) as f32 * cell_h + cell_h * 0.5,
+                &mut instances,
+            );
 
             let (prompt_fg, text_fg) = if focused {
                 (prompt_color, fg_color)

@@ -45,7 +45,8 @@ impl App {
             tab.root.layout(content);
             for pane in tab.root.panes_mut() {
                 let alt = pane.terminal.is_alt_screen();
-                let chrome_rows = if alt { 0 } else { 1 + pane.input.line_count() };
+                // Top rule + input lines + bottom rule (Claude-style box).
+                let chrome_rows = if alt { 0 } else { 2 + pane.input.line_count() };
                 pane.chrome = (alt, pane.input.line_count());
                 let cols = ((pane.viewport.width / cell_w) as usize).max(1);
                 let total_rows = ((pane.viewport.height / cell_h) as usize).max(1);

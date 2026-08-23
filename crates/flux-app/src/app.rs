@@ -36,8 +36,9 @@ use crate::mux::{MuxState, Pane};
 
 pub(crate) use popup::PopupState;
 
-/// Minimum rows reserved for the input bar: one divider + one input line.
-pub(crate) const MIN_INPUT_BAR_ROWS: usize = 2;
+/// Minimum rows reserved for the input bar: top rule + one input line
+/// + bottom rule.
+pub(crate) const MIN_INPUT_BAR_ROWS: usize = 3;
 
 /// Height of the custom titlebar strip in logical pixels (macOS
 /// unified chrome; zero elsewhere — native decorations remain).

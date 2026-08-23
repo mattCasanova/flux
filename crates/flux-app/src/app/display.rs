@@ -68,8 +68,9 @@ impl App {
             let focused = pane.id == focus;
             let lines = pane.input.line_count();
             let vp = pane.viewport;
-            // The bar hugs the bottom of the pane's viewport.
-            let bar_h = (1 + lines) as f32 * metrics.height;
+            // The bar hugs the bottom of the pane's viewport:
+            // top rule + input lines + bottom rule.
+            let bar_h = (2 + lines) as f32 * metrics.height;
             let top_y = vp.y + vp.height - bar_h;
             if focused {
                 let cursor_row_y = top_y + metrics.height * (1 + pane.input.cursor_line()) as f32;
