@@ -17,3 +17,4 @@ pub use atlas::GlyphStyle;
 pub use output::PaneView;
 pub use renderer::{AltBgPolicy, CellMetrics, Renderer};
 pub use ui::PopupKind;
+pub use ui::input_bar::InputBar;

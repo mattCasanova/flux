@@ -242,8 +242,10 @@ impl App {
             return;
         };
         self.clear_selection();
-        self.input.clear();
-        self.input.insert_str(&command);
+        if let Some(editor) = self.input_mut() {
+            editor.clear();
+            editor.insert_str(&command);
+        }
         self.update_input_display();
         self.request_redraw();
     }

@@ -2,7 +2,7 @@
 //! output that isn't shell content. Each submodule adds an
 //! `impl Renderer` block with methods for a specific UI element.
 
-mod input_bar;
+pub mod input_bar;
 mod popup;
 mod tab_bar;
 

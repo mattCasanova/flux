@@ -28,10 +28,15 @@ impl App {
         let wake = Box::new(move || {
             let _ = proxy.send_event(());
         });
-        match self
-            .mux
-            .create_tab(0, cols.max(1) as u16, rows.max(1) as u16, wake, terminal)
-        {
+        let editor = self.new_editor();
+        match self.mux.create_tab(
+            0,
+            cols.max(1) as u16,
+            rows.max(1) as u16,
+            wake,
+            terminal,
+            editor,
+        ) {
             Ok(_) => self.after_tab_switch(),
             Err(e) => log::error!("new tab failed: {e:#}"),
         }
@@ -99,6 +104,7 @@ impl App {
         let wake = Box::new(move || {
             let _ = proxy.send_event(());
         });
+        let editor = self.new_editor();
         match self.mux.split_focused(
             axis,
             0,
@@ -106,6 +112,7 @@ impl App {
             rows.max(1) as u16,
             wake,
             terminal,
+            editor,
         ) {
             Ok(_) => self.after_tab_switch(),
             Err(e) => log::error!("split failed: {e:#}"),
@@ -213,9 +220,7 @@ impl App {
         self.apply_focused_title();
         self.update_tab_bar();
         self.update_display();
-        if !self.raw_mode {
-            self.update_input_display();
-        }
+        self.update_input_display();
         self.request_redraw();
     }
 

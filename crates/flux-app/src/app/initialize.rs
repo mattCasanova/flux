@@ -116,9 +116,15 @@ impl App {
         let wake = Box::new(move || {
             let _ = proxy.send_event(());
         });
-        let tab = self
-            .mux
-            .create_tab(0, cols.max(1) as u16, rows.max(1) as u16, wake, terminal)?;
+        let editor = self.new_editor();
+        let tab = self.mux.create_tab(
+            0,
+            cols.max(1) as u16,
+            rows.max(1) as u16,
+            wake,
+            terminal,
+            editor,
+        )?;
 
         if inject_via_pty && let Some(script) = &script_path {
             // Fallback path (bash/fish): source the script in the new

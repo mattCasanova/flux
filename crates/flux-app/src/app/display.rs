@@ -40,27 +40,74 @@ impl App {
         }
     }
 
-    /// Push the current input editor state to the renderer. If the
-    /// input line count changed, recompute the layout so the PTY gets
-    /// the updated row count.
+    /// Push every cooked pane's input bar to the renderer (the focused
+    /// pane's bar carries the block cursor; unfocused bars render dim
+    /// with no cursor). Re-runs layout first when any pane's chrome
+    /// (alt state, editor line count) changed — that resizes only the
+    /// panes whose dimensions actually changed.
     pub(super) fn update_input_display(&mut self) {
-        let current_lines = self.input.line_count();
-        if current_lines != self.last_input_lines {
-            self.last_input_lines = current_lines;
+        if self.chrome_dirty() {
             self.apply_window_layout();
             self.update_display();
         }
 
+        let Some(tab) = self.mux.focused_tab() else {
+            return;
+        };
+        let focus = tab.focus;
+        let metrics = match &self.renderer {
+            Some(renderer) => renderer.cell_metrics(),
+            None => return,
+        };
+        let mut bars: Vec<flux_renderer::InputBar> = Vec::new();
+        let mut anchor: Option<(f32, f32, usize)> = None; // popup anchor
+        for pane in tab.root.panes() {
+            if pane.terminal.is_alt_screen() {
+                continue;
+            }
+            let focused = pane.id == focus;
+            let lines = pane.input.line_count();
+            let vp = pane.viewport;
+            // The bar hugs the bottom of the pane's viewport.
+            let bar_h = (1 + lines) as f32 * metrics.height;
+            let top_y = vp.y + vp.height - bar_h;
+            if focused {
+                let cursor_row_y = top_y + metrics.height * (1 + pane.input.cursor_line()) as f32;
+                anchor = Some((vp.x, cursor_row_y, pane.input.cursor_col_in_line()));
+            }
+            bars.push(flux_renderer::InputBar {
+                origin: [vp.x, top_y],
+                width: vp.width,
+                text: pane.input.buffer().to_string(),
+                cursor: focused
+                    .then(|| (pane.input.cursor_line(), pane.input.cursor_col_in_line())),
+            });
+        }
+        let popup_data = self.autocomplete_popup_data();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let cursor = (self.input.cursor_line(), self.input.cursor_col_in_line());
-        renderer.set_input_block(self.input.buffer(), cursor);
+        renderer.set_input_bars(&bars);
 
-        // Autocomplete popup.
-        if matches!(self.popup, PopupState::Autocomplete) && self.autocomplete.active() {
-            let candidates: Vec<(String, flux_renderer::PopupKind)> = self
-                .autocomplete
+        // Autocomplete popup, anchored at the focused pane's cursor.
+        if let (Some(candidates), Some((bar_x, row_y, cursor_col))) = (popup_data, anchor) {
+            let selected = self.autocomplete.selected_index();
+            let anchor_px_x = bar_x;
+            let anchor_col = cursor_col + 2; // prompt prefix width
+            let _ = anchor_px_x;
+            renderer.set_autocomplete_popup(&candidates, selected, anchor_col, row_y);
+        } else if !matches!(self.popup, PopupState::Search) {
+            renderer.hide_autocomplete_popup();
+        }
+    }
+
+    /// Candidate list for the popup, if it should be visible.
+    fn autocomplete_popup_data(&self) -> Option<Vec<(String, flux_renderer::PopupKind)>> {
+        if !(matches!(self.popup, PopupState::Autocomplete) && self.autocomplete.active()) {
+            return None;
+        }
+        Some(
+            self.autocomplete
                 .visible_candidates()
                 .iter()
                 .map(|c| {
@@ -72,36 +119,8 @@ impl App {
                     };
                     (c.name.clone(), kind)
                 })
-                .collect();
-
-            let selected = self.autocomplete.selected_index();
-
-            // Compute anchor position — cursor row Y in the input bar.
-            let metrics = renderer.cell_metrics();
-            let cell_h = metrics.height;
-            let window_h = self
-                .window
-                .as_ref()
-                .map(|w| w.inner_size().height)
-                .unwrap_or(0) as f32;
-            let scale = self
-                .window
-                .as_ref()
-                .map(|w| w.scale_factor() as f32)
-                .unwrap_or(1.0);
-            let pad_y = self.config.window.padding_vertical * scale;
-            let line_count = self.input.line_count();
-            let block_bottom_y = window_h - pad_y - cell_h;
-            let block_top_y = block_bottom_y - (line_count as f32 - 1.0) * cell_h;
-            let cursor_row = self.input.cursor_line();
-            let anchor_row_y = block_top_y + (cursor_row as f32) * cell_h;
-            // +2 for the prompt prefix characters.
-            let anchor_col = self.input.cursor_col_in_line() + 2;
-
-            renderer.set_autocomplete_popup(&candidates, selected, anchor_col, anchor_row_y);
-        } else if !matches!(self.popup, PopupState::Search) {
-            renderer.hide_autocomplete_popup();
-        }
+                .collect(),
+        )
     }
 
     pub(super) fn handle_redraw(&mut self) {

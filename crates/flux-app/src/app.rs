@@ -27,7 +27,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use flux_input::{Autocomplete, InputEditor};
+use flux_input::{Autocomplete, CommandHistory, InputEditor};
 use flux_terminal::state::TerminalState;
 
 use crate::config::FluxConfig;
@@ -47,10 +47,12 @@ pub struct App {
     pub(crate) proxy: winit::event_loop::EventLoopProxy<()>,
     pub(crate) window: Option<Arc<Window>>,
     pub(crate) renderer: Option<flux_renderer::Renderer>,
-    /// Tabs and panes (#40). One tab, one pane today; every keystroke,
-    /// PTY read, and render goes through the focused pane.
+    /// Tabs and panes (#40); every keystroke, PTY read, and render
+    /// goes through the focused pane.
     pub(crate) mux: MuxState,
-    pub(crate) input: InputEditor,
+    /// Shell history loaded at startup — cloned into each new pane's
+    /// editor. (Live cross-pane history sync is future work.)
+    pub(crate) base_history: CommandHistory,
     /// True when a full-screen program (vim, less, fzf) owns the keyboard.
     /// When set, keystrokes route directly to the PTY and Flux's input
     /// chrome collapses to zero.
@@ -71,9 +73,6 @@ pub struct App {
     pub(crate) search: search::SearchBar,
     /// Armed close confirmation: (what, id) and when (#58).
     pub(crate) close_confirm: Option<((&'static str, u64), std::time::Instant)>,
-    /// Tracks the input bar's line count so we only recompute layout
-    /// when it changes (avoids unnecessary PTY resizes).
-    pub(crate) last_input_lines: usize,
     /// Fractional scroll remainder from trackpad pixel deltas — whole
     /// lines are consumed per wheel event, the rest accumulates here.
     pub(crate) scroll_accum: f32,
@@ -93,16 +92,32 @@ impl App {
         self.mux.focused_pane().map(|pane| &pane.terminal)
     }
 
-    /// The focused pane (PTY + terminal together — one borrow, so
-    /// callers can use both sides without fighting the borrow checker).
+    /// The focused pane (PTY + terminal + editor together — one
+    /// borrow, so callers can use all sides without fighting the
+    /// borrow checker).
     pub(crate) fn pane_mut(&mut self) -> Option<&mut Pane> {
         self.mux.focused_pane_mut()
+    }
+
+    /// The focused pane's input editor.
+    pub(crate) fn input_mut(&mut self) -> Option<&mut InputEditor> {
+        self.mux.focused_pane_mut().map(|pane| &mut pane.input)
+    }
+
+    /// Immutable view of the focused pane's editor.
+    pub(crate) fn input_ref(&self) -> Option<&InputEditor> {
+        self.mux.focused_pane().map(|pane| &pane.input)
+    }
+
+    /// A fresh editor for a new pane, seeded with the shell history.
+    pub(crate) fn new_editor(&self) -> InputEditor {
+        InputEditor::with_history(self.base_history.clone())
     }
 
     pub fn new(
         config: FluxConfig,
         proxy: winit::event_loop::EventLoopProxy<()>,
-        input: InputEditor,
+        history: CommandHistory,
     ) -> Self {
         let keymap = Keymap::defaults().with_overrides(&config.keys);
         Self {
@@ -112,7 +127,7 @@ impl App {
             window: None,
             renderer: None,
             mux: MuxState::new(),
-            input,
+            base_history: history,
             raw_mode: false,
             modifiers: ModifiersState::empty(),
             clipboard: None,
@@ -120,7 +135,6 @@ impl App {
             autocomplete: Autocomplete::default(),
             search: search::SearchBar::default(),
             close_confirm: None,
-            last_input_lines: 1,
             scroll_accum: 0.0,
             shell_exited: false,
             mouse: mouse::MouseState::default(),

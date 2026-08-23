@@ -29,23 +29,25 @@ impl App {
         let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
         renderer.set_content_top(bar_h);
         let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
-        // 1 divider row + N input lines (dynamic based on editor content).
-        let input_lines = self.input.line_count();
-        let chrome_rows = if self.raw_mode { 0 } else { 1 + input_lines };
-        let usable_h =
-            (inner_size.height as f32 - pad_y * 2.0 - bar_h - chrome_rows as f32 * metrics.height)
-                .max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - bar_h).max(0.0);
         let content = flux_types::Rect::new(pad_x, pad_y + bar_h, usable_w, usable_h);
         let cell_w = metrics.width;
         let cell_h = metrics.height;
 
-        // Lay the pane tree out over the content rect and size every
-        // pane's grid to its viewport (whole cells only).
+        // Lay the pane tree out over the content rect. Each pane is a
+        // self-contained mini terminal: its own input bar (divider +
+        // editor lines) occupies the BOTTOM of its viewport unless an
+        // alt-screen program owns it — so chrome changes in one pane
+        // never resize its neighbors (per-split input, dogfood 08-23).
         if let Some(tab) = self.mux.focused_tab_mut() {
             tab.root.layout(content);
             for pane in tab.root.panes_mut() {
+                let alt = pane.terminal.is_alt_screen();
+                let chrome_rows = if alt { 0 } else { 1 + pane.input.line_count() };
+                pane.chrome = (alt, pane.input.line_count());
                 let cols = ((pane.viewport.width / cell_w) as usize).max(1);
-                let rows = ((pane.viewport.height / cell_h) as usize).max(1);
+                let total_rows = ((pane.viewport.height / cell_h) as usize).max(1);
+                let rows = total_rows.saturating_sub(chrome_rows).max(1);
                 if pane.terminal.cols() != cols || pane.terminal.rows() != rows {
                     pane.terminal.resize(cols, rows);
                     let _ = pane.pty.resize(cols as u16, rows as u16);
@@ -65,25 +67,28 @@ impl App {
         let window = self.window.as_ref()?;
         let renderer = self.renderer.as_ref()?;
         let inner_size = window.inner_size();
-        let metrics = renderer.cell_metrics();
         let pad_x = padding_x(&self.config, window);
         let pad_y = padding_y(&self.config, window);
         let bar_h = renderer.tab_bar_height(self.mux.tabs.len());
-        let chrome_rows = if self.raw_mode {
-            0
-        } else {
-            1 + self.input.line_count()
-        };
         let usable_w = (inner_size.width as f32 - pad_x * 2.0).max(0.0);
-        let usable_h =
-            (inner_size.height as f32 - pad_y * 2.0 - bar_h - chrome_rows as f32 * metrics.height)
-                .max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - bar_h).max(0.0);
         Some(flux_types::Rect::new(
             pad_x,
             pad_y + bar_h,
             usable_w,
             usable_h,
         ))
+    }
+
+    /// True when any pane's chrome inputs (alt-screen state, editor
+    /// line count) differ from the last layout — relayout needed.
+    pub(super) fn chrome_dirty(&self) -> bool {
+        self.mux.focused_tab().is_some_and(|tab| {
+            tab.root
+                .panes()
+                .iter()
+                .any(|pane| pane.chrome != (pane.terminal.is_alt_screen(), pane.input.line_count()))
+        })
     }
 
     /// Push split dividers + focused accent to the renderer.
@@ -114,9 +119,7 @@ impl App {
 
         self.apply_window_layout();
         self.update_display();
-        if !self.raw_mode {
-            self.update_input_display();
-        }
+        self.update_input_display();
 
         let renderer = self.renderer.as_mut().expect("renderer not initialized");
         if let Err(e) = renderer.render() {
@@ -147,9 +150,7 @@ impl App {
 
         self.apply_window_layout();
         self.update_display();
-        if !self.raw_mode {
-            self.update_input_display();
-        }
+        self.update_input_display();
         self.request_redraw();
     }
 }

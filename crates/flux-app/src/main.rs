@@ -11,7 +11,7 @@ mod platform;
 
 use anyhow::Result;
 use app::App;
-use flux_input::{CommandHistory, InputEditor};
+use flux_input::CommandHistory;
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
@@ -35,7 +35,6 @@ fn main() -> Result<()> {
     let shell_history = shell.load_history();
     log::info!("Loaded {} entries from shell history", shell_history.len());
     let history = CommandHistory::load(history_path, 10_000, shell_history);
-    let input = InputEditor::with_history(history);
 
     println!(
         "Flux v{} ({}) — 1.21 gigawatts",
@@ -45,7 +44,7 @@ fn main() -> Result<()> {
 
     let event_loop = EventLoop::new()?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(config, proxy, input);
+    let mut app = App::new(config, proxy, history);
     event_loop.run_app(&mut app)?;
 
     Ok(())

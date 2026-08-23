@@ -69,7 +69,9 @@ impl App {
         } else {
             // Multi-line paste: normalize \r\n to \n, strip trailing \r.
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-            self.input.insert_str(&normalized);
+            if let Some(editor) = self.input_mut() {
+                editor.insert_str(&normalized);
+            }
             self.update_input_display();
         }
 

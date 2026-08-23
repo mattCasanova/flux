@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 
+use flux_input::InputEditor;
 use flux_terminal::pty::WakeCallback;
 use flux_terminal::state::TerminalState;
 use flux_terminal::{Domain, DomainId, PaneId, Pty};
@@ -20,8 +21,14 @@ pub struct Pane {
     pub domain_id: DomainId,
     pub pty: Box<dyn Pty + Send>,
     pub terminal: TerminalState,
-    /// Pixel rectangle this pane paints into (set by layout).
+    /// This pane's own input editor — every pane is a full mini
+    /// terminal with its own bar (per-split input, dogfood 08-15).
+    pub input: InputEditor,
+    /// Pixel rectangle this pane paints into (grid + its input bar).
     pub viewport: Rect,
+    /// Chrome state at the last layout: (alt_screen, input_lines).
+    /// Layout re-runs when either changes for this pane.
+    pub chrome: (bool, usize),
 }
 
 /// Which way a split divides its space.
@@ -240,7 +247,9 @@ fn dummy_pane() -> Pane {
         domain_id: 0,
         pty: Box::new(NoPty),
         terminal: TerminalState::new(1, 1, 0, flux_types::ResolvedTheme::default()),
+        input: InputEditor::new(),
         viewport: Rect::new(0.0, 0.0, 0.0, 0.0),
+        chrome: (false, 1),
     }
 }
 
@@ -334,6 +343,7 @@ impl MuxState {
         rows: u16,
         wake: WakeCallback,
         terminal: TerminalState,
+        input: InputEditor,
     ) -> Result<Pane> {
         let domain = self
             .domains
@@ -346,7 +356,9 @@ impl MuxState {
             domain_id,
             pty,
             terminal,
+            input,
             viewport: Rect::new(0.0, 0.0, 0.0, 0.0),
+            chrome: (false, 1),
         };
         self.next_pane_id += 1;
         Ok(pane)
@@ -362,8 +374,9 @@ impl MuxState {
         rows: u16,
         wake: WakeCallback,
         terminal: TerminalState,
+        input: InputEditor,
     ) -> Result<&mut Tab> {
-        let pane = self.spawn_pane(domain_id, cols, rows, wake, terminal)?;
+        let pane = self.spawn_pane(domain_id, cols, rows, wake, terminal, input)?;
         let tab = Tab {
             id: self.next_tab_id,
             focus: pane.id,
@@ -378,6 +391,7 @@ impl MuxState {
 
     /// Split the focused pane of the current tab along `axis`; the new
     /// shell goes right/below and takes focus. Returns the new pane id.
+    #[allow(clippy::too_many_arguments)] // spawn inputs; a builder would obscure more than it helps
     pub fn split_focused(
         &mut self,
         axis: SplitAxis,
@@ -386,12 +400,13 @@ impl MuxState {
         rows: u16,
         wake: WakeCallback,
         terminal: TerminalState,
+        input: InputEditor,
     ) -> Result<PaneId> {
         let target = self
             .focused_tab()
             .map(|t| t.focus)
             .context("no focused pane to split")?;
-        let pane = self.spawn_pane(domain_id, cols, rows, wake, terminal)?;
+        let pane = self.spawn_pane(domain_id, cols, rows, wake, terminal, input)?;
         let new_id = pane.id;
         let tab = self.tabs.get_mut(self.current_tab).context("no tab")?;
         split_at(&mut tab.root, target, axis, pane);
@@ -607,7 +622,8 @@ mod tests {
         }));
         assert!(mux.focused_pane().is_none(), "no tabs yet");
 
-        mux.create_tab(7, 80, 24, wake(), term()).unwrap();
+        mux.create_tab(7, 80, 24, wake(), term(), InputEditor::new())
+            .unwrap();
         assert_eq!(spawned.load(Ordering::SeqCst), 1);
         assert_eq!(mux.tabs.len(), 1);
         assert_eq!(mux.current_tab, 0);
@@ -617,7 +633,8 @@ mod tests {
         pane.terminal.process_bytes(b"output\r\n");
 
         // A second tab takes focus; ids stay distinct.
-        mux.create_tab(7, 80, 24, wake(), term()).unwrap();
+        mux.create_tab(7, 80, 24, wake(), term(), InputEditor::new())
+            .unwrap();
         assert_eq!(mux.current_tab, 1);
         assert_ne!(mux.tabs[0].root.ids(), mux.tabs[1].root.ids());
         assert_ne!(mux.tabs[0].id, mux.tabs[1].id);
@@ -630,7 +647,8 @@ mod tests {
             spawned: Arc::new(AtomicU16::new(0)),
         }));
         for _ in 0..n {
-            mux.create_tab(0, 80, 24, wake(), term()).unwrap();
+            mux.create_tab(0, 80, 24, wake(), term(), InputEditor::new())
+                .unwrap();
         }
         mux
     }
@@ -668,7 +686,7 @@ mod tests {
     #[test]
     fn create_tab_with_unknown_domain_errors() {
         let mut mux = MuxState::new();
-        let result = mux.create_tab(99, 80, 24, wake(), term());
+        let result = mux.create_tab(99, 80, 24, wake(), term(), InputEditor::new());
         let err = result.err().expect("unknown domain must error");
         assert!(err.to_string().contains("no domain"), "{err}");
     }
@@ -680,7 +698,15 @@ mod tests {
         let mut mux = mux_with_tabs(1);
         let first = mux.focused_pane().unwrap().id;
         let new = mux
-            .split_focused(SplitAxis::Horizontal, 0, 40, 24, wake(), term())
+            .split_focused(
+                SplitAxis::Horizontal,
+                0,
+                40,
+                24,
+                wake(),
+                term(),
+                InputEditor::new(),
+            )
             .unwrap();
         assert_ne!(new, first);
         assert_eq!(mux.focused_pane().unwrap().id, new, "new pane takes focus");
@@ -707,11 +733,27 @@ mod tests {
         let mut mux = mux_with_tabs(1);
         let a = mux.focused_pane().unwrap().id;
         let b = mux
-            .split_focused(SplitAxis::Horizontal, 0, 40, 24, wake(), term())
+            .split_focused(
+                SplitAxis::Horizontal,
+                0,
+                40,
+                24,
+                wake(),
+                term(),
+                InputEditor::new(),
+            )
             .unwrap();
         // Split the right pane vertically: c below b.
         let c = mux
-            .split_focused(SplitAxis::Vertical, 0, 40, 12, wake(), term())
+            .split_focused(
+                SplitAxis::Vertical,
+                0,
+                40,
+                12,
+                wake(),
+                term(),
+                InputEditor::new(),
+            )
             .unwrap();
         let tab = mux.focused_tab_mut().unwrap();
         tab.root.layout(Rect::new(0.0, 0.0, 206.0, 106.0));
@@ -738,7 +780,15 @@ mod tests {
         let mut mux = mux_with_tabs(1);
         let a = mux.focused_pane().unwrap().id;
         let b = mux
-            .split_focused(SplitAxis::Horizontal, 0, 40, 24, wake(), term())
+            .split_focused(
+                SplitAxis::Horizontal,
+                0,
+                40,
+                24,
+                wake(),
+                term(),
+                InputEditor::new(),
+            )
             .unwrap();
         assert_eq!(mux.focused_pane().unwrap().id, b);
         assert!(!mux.close_focused_pane(), "tab still has a pane");
@@ -752,7 +802,15 @@ mod tests {
         let mut mux = mux_with_tabs(2);
         // Split tab 1 (current), then go to tab 0.
         let b = mux
-            .split_focused(SplitAxis::Vertical, 0, 80, 12, wake(), term())
+            .split_focused(
+                SplitAxis::Vertical,
+                0,
+                80,
+                12,
+                wake(),
+                term(),
+                InputEditor::new(),
+            )
             .unwrap();
         mux.select_tab(0);
         assert_eq!(mux.remove_pane_anywhere(b), None, "tab 1 still has a pane");

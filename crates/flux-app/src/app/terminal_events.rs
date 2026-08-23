@@ -111,29 +111,17 @@ impl App {
             return;
         }
         self.raw_mode = raw;
-        log::info!("Raw mode: {}", raw);
+        log::info!("Raw mode (focused pane alt screen): {}", raw);
 
         // The grid contents are about to be swapped wholesale (entering
         // or leaving the alt screen) — any selection now points at the
         // wrong content.
         self.clear_selection();
 
-        if let Some(renderer) = &mut self.renderer {
-            renderer.set_bottom_anchor(!raw);
-            // Shell-cursor visibility is decided per frame in
-            // `update_display` (alt screen OR executing).
-        }
-
-        // Recompute the grid dimensions so alt-screen programs get every
-        // row, and restore the 2-row chrome when they exit.
-        self.apply_window_layout();
-
-        if raw {
-            if let Some(renderer) = &mut self.renderer {
-                renderer.hide_input_bar();
-            }
-        } else {
-            self.update_input_display();
-        }
+        // Chrome is per-pane: update_input_display notices the pane's
+        // alt transition (chrome_dirty), relayouts JUST that pane, and
+        // rebuilds the bars. Bottom-anchor and cursor visibility are
+        // decided per pane per frame in update_display.
+        self.update_input_display();
     }
 }

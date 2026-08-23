@@ -87,9 +87,13 @@ impl App {
             Action::Paste => self.handle_paste(),
             Action::Undo | Action::Redo => {
                 if action == Action::Undo {
-                    self.input.undo();
+                    if let Some(editor) = self.input_mut() {
+                        editor.undo();
+                    }
                 } else {
-                    self.input.redo();
+                    if let Some(editor) = self.input_mut() {
+                        editor.redo();
+                    }
                 }
                 self.maybe_update_autocomplete();
                 self.update_input_display();
@@ -191,13 +195,18 @@ impl App {
             // Shift+Enter inserts a newline; Enter submits the buffer.
             Key::Named(NamedKey::Enter) => {
                 if self.modifiers.shift_key() {
-                    self.input.insert_newline();
+                    if let Some(editor) = self.input_mut() {
+                        editor.insert_newline();
+                    }
                 } else {
                     // Submitting a command returns the viewport to the
                     // live tail — standard "typing brings you back".
                     self.snap_to_bottom();
                     self.clear_selection();
-                    let line = self.input.take_line();
+                    let line = self
+                        .input_mut()
+                        .map(|editor| editor.take_line())
+                        .unwrap_or_default();
                     // Multi-line buffers must reach the shell as ONE
                     // unit. Raw embedded \n = one accept-line per line
                     // in zle, which shatters loops into per-line parse
@@ -234,39 +243,51 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::Backspace) => {
-                self.input.backspace();
+                if let Some(editor) = self.input_mut() {
+                    editor.backspace();
+                }
                 self.update_input_display();
                 self.maybe_update_autocomplete();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::Delete) => {
-                self.input.delete_forward();
+                if let Some(editor) = self.input_mut() {
+                    editor.delete_forward();
+                }
                 self.update_input_display();
                 self.maybe_update_autocomplete();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::ArrowLeft) => {
-                self.input.move_left();
+                if let Some(editor) = self.input_mut() {
+                    editor.move_left();
+                }
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::ArrowRight) => {
-                self.input.move_right();
+                if let Some(editor) = self.input_mut() {
+                    editor.move_right();
+                }
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::Home) => {
-                self.input.home_line();
+                if let Some(editor) = self.input_mut() {
+                    editor.home_line();
+                }
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::End) => {
-                self.input.end_line();
+                if let Some(editor) = self.input_mut() {
+                    editor.end_line();
+                }
                 self.update_input_display();
                 self.request_redraw();
                 return;
@@ -274,30 +295,42 @@ impl App {
             Key::Named(NamedKey::ArrowUp) => {
                 // Cmd+Up / Cmd+Shift+Up are keymap actions (scroll,
                 // block hop); plain Up is editor/history.
-                let on_first_line = self.input.cursor_line() == 0;
-                if self.input.line_count() == 1 || on_first_line {
-                    self.input.history_prev();
+                let on_first_line = self.input_ref().is_none_or(|e| e.cursor_line() == 0);
+                if self.input_ref().is_none_or(|e| e.line_count() == 1) || on_first_line {
+                    if let Some(editor) = self.input_mut() {
+                        editor.history_prev();
+                    }
                 } else {
-                    self.input.move_up();
+                    if let Some(editor) = self.input_mut() {
+                        editor.move_up();
+                    }
                 }
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::ArrowDown) => {
-                let on_last_line = self.input.cursor_line() == self.input.line_count() - 1;
-                if self.input.line_count() == 1 || on_last_line {
-                    self.input.history_next();
+                let on_last_line = self
+                    .input_ref()
+                    .is_none_or(|e| e.cursor_line() + 1 == e.line_count());
+                if self.input_ref().is_none_or(|e| e.line_count() == 1) || on_last_line {
+                    if let Some(editor) = self.input_mut() {
+                        editor.history_next();
+                    }
                 } else {
-                    self.input.move_down();
+                    if let Some(editor) = self.input_mut() {
+                        editor.move_down();
+                    }
                 }
                 self.update_input_display();
                 self.request_redraw();
                 return;
             }
             Key::Named(NamedKey::Escape) => {
-                if self.input.is_in_history_recall() {
-                    self.input.cancel_history_recall();
+                if self.input_ref().is_some_and(|e| e.is_in_history_recall()) {
+                    if let Some(editor) = self.input_mut() {
+                        editor.cancel_history_recall();
+                    }
                     self.update_input_display();
                     self.request_redraw();
                     return;
@@ -331,7 +364,9 @@ impl App {
             text.len() == 1 && (text.as_bytes()[0] < 0x20 || text.as_bytes()[0] == 0x7f);
         if is_control {
             if text.as_bytes()[0] == 0x03 {
-                self.input.clear();
+                if let Some(editor) = self.input_mut() {
+                    editor.clear();
+                }
                 self.update_input_display();
             }
             if let Some(pane) = self.pane_mut() {
@@ -341,7 +376,9 @@ impl App {
         } else {
             // Typing means the user has moved on — stale selections go.
             self.clear_selection();
-            self.input.insert_str(text);
+            if let Some(editor) = self.input_mut() {
+                editor.insert_str(text);
+            }
             self.update_input_display();
             self.maybe_update_autocomplete();
         }
@@ -354,9 +391,13 @@ impl App {
     /// is quiet, Enter always submits, completion is explicit).
     pub(super) fn maybe_update_autocomplete(&mut self) {
         if matches!(self.popup, PopupState::Autocomplete) && self.autocomplete.active() {
-            let buffer = self.input.buffer();
-            let cursor = self.input.cursor();
-            if !self.autocomplete.update_filter(buffer, cursor) {
+            let Some((buffer, cursor)) = self
+                .input_ref()
+                .map(|e| (e.buffer().to_string(), e.cursor()))
+            else {
+                return;
+            };
+            if !self.autocomplete.update_filter(&buffer, cursor) {
                 self.popup = PopupState::Hidden;
             }
             self.update_input_display();
@@ -366,10 +407,14 @@ impl App {
     /// Summon the autocomplete popup at the cursor (Tab in cooked
     /// mode). A single match skips the menu and completes inline.
     fn open_autocomplete(&mut self) {
-        let buffer = self.input.buffer();
-        let cursor = self.input.cursor();
+        let Some((buffer, cursor)) = self
+            .input_ref()
+            .map(|e| (e.buffer().to_string(), e.cursor()))
+        else {
+            return;
+        };
 
-        let Some((token_start, command)) = Autocomplete::should_trigger(buffer, cursor) else {
+        let Some((token_start, command)) = Autocomplete::should_trigger(&buffer, cursor) else {
             return;
         };
         let Some(cwd) = self
@@ -381,7 +426,7 @@ impl App {
         };
         match self
             .autocomplete
-            .trigger(&cwd, buffer, cursor, token_start, &command)
+            .trigger(&cwd, &buffer, cursor, token_start, &command)
         {
             Ok(()) if self.autocomplete.active() => {
                 if self.autocomplete.visible_len() == 1 {
@@ -403,12 +448,16 @@ impl App {
     /// Insert the selected candidate into the buffer, close the menu,
     /// and stop (no auto-reopen — Tab again descends).
     fn commit_autocomplete_selection(&mut self) {
-        let cursor = self.input.cursor();
-        if let Some((replace_start, replacement)) =
-            self.autocomplete.commit(self.input.buffer(), cursor)
+        let Some((buffer, cursor)) = self
+            .input_ref()
+            .map(|e| (e.buffer().to_string(), e.cursor()))
+        else {
+            return;
+        };
+        if let Some((replace_start, replacement)) = self.autocomplete.commit(&buffer, cursor)
+            && let Some(editor) = self.input_mut()
         {
-            self.input
-                .replace_range(replace_start, cursor, &replacement);
+            editor.replace_range(replace_start, cursor, &replacement);
         }
         self.autocomplete.dismiss();
         self.popup = PopupState::Hidden;

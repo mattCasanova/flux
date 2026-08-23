@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_MAX_SIZE: usize = 10_000;
 
+#[derive(Clone)]
 pub struct CommandHistory {
     entries: Vec<String>,
     path: Option<PathBuf>,
