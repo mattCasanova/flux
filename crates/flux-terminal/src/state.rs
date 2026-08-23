@@ -2097,11 +2097,8 @@ mod tests {
                 .debug_row_text_abs(first.prompt_start)
                 .starts_with("~ >echo long")
         );
-        let text = {
-            // block selection followed the block across the reflow
-            let sel = state.selected_block_text().expect("selection survived");
-            sel
-        };
+        // Block selection followed the block across the reflow.
+        let text = state.selected_block_text().expect("selection survived");
         assert!(text.starts_with("~ >echo long"), "{text:?}");
         assert!(
             text.contains(&long),
