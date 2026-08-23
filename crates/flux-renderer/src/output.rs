@@ -42,6 +42,40 @@ fn blend_search_tint(bg: Color, focused: bool) -> Color {
     }
 }
 
+/// Rows to shift a bottom-anchored grid down by.
+///
+/// Anchors on the LAST CONTENT ROW, not the raw cursor row: an inline
+/// TUI (Claude Code's Ink prompts) parks its cursor on whichever row
+/// is selected, and anchoring there made every arrow press shift the
+/// whole frame — and pushed the UI's trailing lines below the output
+/// area into the input bar (dogfood 2026-08-15, pain #23). The cursor
+/// row still counts as content (a streaming command's cursor sits one
+/// row past its output), so the anchor is the max of both. A grid
+/// with no cursor keeps its rows in place (scrolled views).
+fn bottom_anchor_shift(grid: &TerminalGrid, clear: Color) -> usize {
+    let last_row = grid.rows.saturating_sub(1);
+    let cursor_row = grid.cursor.map(|(_, r)| r);
+    let content_row = last_content_row(grid, clear);
+    let anchor_row = match (cursor_row, content_row) {
+        (Some(c), Some(l)) => c.max(l),
+        (Some(c), None) => c,
+        (None, _) => last_row,
+    };
+    last_row.saturating_sub(anchor_row.min(last_row))
+}
+
+/// Last row that holds visible content: a non-blank character, or a
+/// background differing from `clear` (a TUI's tinted-but-blank row is
+/// content). None for an empty grid.
+fn last_content_row(grid: &TerminalGrid, clear: Color) -> Option<usize> {
+    (0..grid.rows).rev().find(|&row| {
+        (0..grid.cols).any(|col| {
+            let cell = grid.get(row, col);
+            !matches!(cell.character, ' ' | '\0') || !color_matches(cell.bg, clear)
+        })
+    })
+}
+
 fn blend_over(bg: Color, tint: Color, alpha: f32) -> Color {
     Color::new(
         tint.r * alpha + bg.r * (1.0 - alpha),
@@ -169,12 +203,7 @@ impl Renderer {
         let pad_y = view.origin[1];
 
         let y_shift_rows = if view.bottom_anchor {
-            let anchor_row = grid
-                .cursor
-                .map(|(_, r)| r)
-                .unwrap_or(grid.rows.saturating_sub(1));
-            let last_row = grid.rows.saturating_sub(1);
-            last_row.saturating_sub(anchor_row)
+            bottom_anchor_shift(grid, self.clear_color)
         } else {
             0
         };
@@ -229,9 +258,14 @@ impl Renderer {
         // Draw the shell's cursor block first (so any underlying glyph paints on top).
         // Uses the full cell height so the cursor matches the line grid
         // uniformly regardless of which glyph sits under it.
+        // Nothing may paint below the pane's grid area — not into the
+        // input bar, not into a split neighbor.
+        let pane_bottom = pad_y + grid.rows as f32 * cell_h;
+
         if view.show_cursor
             && !grid.cursor_hidden
             && let Some((col, row)) = grid.cursor
+            && pad_y + row as f32 * cell_h + y_shift + cell_h <= pane_bottom + 0.5
         {
             let cursor_x = pad_x + col as f32 * cell_w;
             let cursor_y = pad_y + row as f32 * cell_h + y_shift;
@@ -256,10 +290,14 @@ impl Renderer {
         }
 
         for row in 0..grid.rows {
+            let row_y = pad_y + row as f32 * cell_h + y_shift;
+            if row_y + cell_h > pane_bottom + 0.5 {
+                break; // shifted below the pane — clipped
+            }
             for col in 0..grid.cols {
                 let cell = grid.get(row, col);
                 let cell_x = pad_x + col as f32 * cell_w;
-                let cell_y = pad_y + row as f32 * cell_h + y_shift;
+                let cell_y = row_y;
                 let is_under_cursor = self.show_shell_cursor
                     && !grid.cursor_hidden
                     && grid.cursor == Some((col, row));
@@ -438,5 +476,108 @@ mod tests {
         }
         let (_, votes, total) = dominant_edge_bg_stats(&grid);
         assert!(votes * 2 <= total, "no strict majority on an even split");
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+    use flux_types::CellData;
+
+    const CLEAR: Color = Color::new(0.1, 0.1, 0.2, 1.0);
+
+    fn grid_with(
+        rows: usize,
+        content: &[(usize, &str)],
+        cursor: Option<(usize, usize)>,
+    ) -> TerminalGrid {
+        let mut grid = TerminalGrid::new(40, rows);
+        for cell in grid.cells.iter_mut() {
+            cell.bg = CLEAR;
+        }
+        for &(row, text) in content {
+            for (col, ch) in text.chars().enumerate() {
+                grid.set(
+                    row,
+                    col,
+                    CellData {
+                        character: ch,
+                        fg: Color::default(),
+                        bg: CLEAR,
+                        flags: CellFlags::empty(),
+                    },
+                );
+            }
+        }
+        grid.cursor = cursor;
+        grid
+    }
+
+    /// The Claude Code trust-prompt scenario: a 6-row inline UI with
+    /// the cursor parked on the selected menu row. The shift must pin
+    /// the UI's LAST line to the bottom and stay put as the cursor
+    /// moves between menu rows — anchoring on the cursor made every
+    /// arrow press jump the frame and bled the trailing lines into
+    /// the input bar.
+    #[test]
+    fn tui_anchor_is_stable_across_cursor_movement_and_never_overflows() {
+        let ui: &[(usize, &str)] = &[
+            (0, "Accessing workspace:"),
+            (2, "> 1. Yes, I trust this folder"),
+            (3, "  2. No, exit"),
+            (5, "Enter to confirm - Esc to cancel"),
+        ];
+        let on_row2 = bottom_anchor_shift(&grid_with(24, ui, Some((0, 2))), CLEAR);
+        let on_row3 = bottom_anchor_shift(&grid_with(24, ui, Some((0, 3))), CLEAR);
+        assert_eq!(
+            on_row2, on_row3,
+            "moving the selection must not move the frame"
+        );
+        // Last content row (5) lands on the bottom row (23): shift 18,
+        // and rows 0..=5 all stay inside the 24-row area.
+        assert_eq!(on_row2, 18);
+    }
+
+    #[test]
+    fn streaming_output_still_anchors_on_the_cursor_row() {
+        // `ls` printed rows 0..=1; the shell cursor sits on blank row 2.
+        let grid = grid_with(24, &[(0, "a"), (1, "b")], Some((0, 2)));
+        assert_eq!(
+            bottom_anchor_shift(&grid, CLEAR),
+            21,
+            "cursor row hugs the bottom"
+        );
+    }
+
+    #[test]
+    fn tinted_blank_rows_count_as_content() {
+        let mut grid = grid_with(24, &[(0, "x")], Some((0, 0)));
+        // A TUI paints row 4 with a tinted background and no glyphs.
+        for col in 0..grid.cols {
+            let mut cell = *grid.get(4, col);
+            cell.bg = Color::new(0.5, 0.2, 0.2, 1.0);
+            grid.set(4, col, cell);
+        }
+        assert_eq!(
+            bottom_anchor_shift(&grid, CLEAR),
+            19,
+            "tinted row 4 is the anchor"
+        );
+    }
+
+    #[test]
+    fn empty_grid_and_no_cursor_cases() {
+        let empty = grid_with(24, &[], Some((0, 0)));
+        assert_eq!(
+            bottom_anchor_shift(&empty, CLEAR),
+            23,
+            "cursor row 0 anchors"
+        );
+        let scrolled = grid_with(24, &[(0, "x")], None);
+        assert_eq!(
+            bottom_anchor_shift(&scrolled, CLEAR),
+            0,
+            "no cursor → no shift"
+        );
     }
 }
