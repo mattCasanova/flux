@@ -58,6 +58,7 @@ impl Renderer {
         slices.push(&self.frame_instances);
         slices.push(&self.input_instances);
         slices.push(&self.tab_instances);
+        slices.push(&self.titlebar_instances);
         slices.push(&self.popup_instances);
         slices.push(&self.notice_instances);
 

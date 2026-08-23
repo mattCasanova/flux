@@ -101,7 +101,7 @@ bright_white   = "#e0e6ff"
 #   selection, search_match, search_focus,
 #   scrollbar_thumb, scrollbar_track,
 #   tab_bg, tab_text, tab_focused_bg, tab_focused_text,  # sidebar panel
-#   sidebar_running,
+#   sidebar_running, titlebar_bg,
 #   input_text, input_dim,
 #   popup_bg, popup_selected_bg, popup_directory, popup_file, popup_symlink,
 #   notice_bg, notice_text,

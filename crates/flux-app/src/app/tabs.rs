@@ -234,12 +234,12 @@ impl App {
             .map(|w| w.inner_size().height)
             .unwrap_or(0);
         if !self.sidebar_visible {
-            // Collapsed: just the floating toggle icon.
+            // Collapsed: the titlebar hosts the persistent toggle.
             let state = (Vec::new(), 0, 0, height);
             if self.last_sidebar.as_ref() != Some(&state) {
                 self.last_sidebar = Some(state);
                 if let Some(renderer) = &mut self.renderer {
-                    renderer.set_sidebar_collapsed_icon();
+                    renderer.hide_sidebar();
                 }
             }
             return;
@@ -266,19 +266,19 @@ impl App {
             return;
         }
         self.last_sidebar = Some(state);
+        let top = self.titlebar_height_px();
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_sidebar(&entries, focused, width);
+            renderer.set_sidebar(&entries, focused, width, top);
         }
     }
 
-    /// True when a click lands on the panel-toggle icon (shown in the
-    /// sidebar header, or floating top-left when collapsed).
+    /// True when a click lands on the titlebar's panel-toggle button.
     pub(super) fn sidebar_toggle_at_pixel(&self, x: f64, y: f64) -> bool {
-        let (ix, iy, iw, ih) = flux_renderer::TOGGLE_RECT;
-        x >= ix as f64 - 4.0
-            && x < (ix + iw) as f64 + 4.0
-            && y >= iy as f64 - 4.0
-            && y < (iy + ih) as f64 + 4.0
+        let Some(renderer) = self.renderer.as_ref() else {
+            return false;
+        };
+        let (ix, iy, iw, ih) = renderer.titlebar_toggle_rect();
+        iw > 0.0 && x >= ix as f64 && x < (ix + iw) as f64 && y >= iy as f64 && y < (iy + ih) as f64
     }
 
     /// Which sidebar entry a click lands on, if inside the panel.
@@ -289,7 +289,7 @@ impl App {
         }
         let renderer = self.renderer.as_ref()?;
         let entry_h = renderer.sidebar_entry_height() as f64;
-        let y = y - flux_renderer::SIDEBAR_TOP_PAD as f64;
+        let y = y - self.titlebar_height_px() as f64 - flux_renderer::SIDEBAR_TOP_PAD as f64;
         if y < 0.0 {
             return None;
         }

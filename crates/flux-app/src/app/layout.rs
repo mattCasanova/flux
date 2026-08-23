@@ -15,6 +15,9 @@ impl App {
     /// for padding and whether Flux chrome is currently reserving rows. Called
     /// on startup, window resize, scale change, and raw-mode transitions.
     pub(super) fn apply_window_layout(&mut self) {
+        // Chrome regions: titlebar strip on top, sidebar on the left.
+        let titlebar_h = self.titlebar_height_px();
+        let sidebar_w = self.sidebar_width_px();
         let Some(window) = &self.window else { return };
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -24,11 +27,12 @@ impl App {
         let metrics = renderer.cell_metrics();
         let pad_x = padding_x(&self.config, window);
         let pad_y = padding_y(&self.config, window);
-        // The sidebar takes a strip off the left when visible.
-        let sidebar_w = self.sidebar_width_px();
+        // Search bar / notices anchor below the titlebar.
+        renderer.set_content_top(titlebar_h);
         let usable_w = (inner_size.width as f32 - pad_x * 2.0 - sidebar_w).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
-        let content = flux_types::Rect::new(sidebar_w + pad_x, pad_y, usable_w, usable_h);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - titlebar_h).max(0.0);
+        let content =
+            flux_types::Rect::new(sidebar_w + pad_x, titlebar_h + pad_y, usable_w, usable_h);
         let cell_w = metrics.width;
         let cell_h = metrics.height;
 
@@ -55,8 +59,33 @@ impl App {
         self.update_pane_frames();
 
         // The panel spans the window height — rebuild on layout so a
-        // resize doesn't leave it stale.
+        // resize doesn't leave it stale. Same for the titlebar strip.
+        self.update_titlebar();
         self.update_sidebar();
+    }
+
+    /// Titlebar strip height in physical pixels.
+    pub(super) fn titlebar_height_px(&self) -> f32 {
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0);
+        crate::app::TITLEBAR_LOGICAL_H * scale
+    }
+
+    /// Redraw the titlebar strip (bg + persistent buttons). The toggle
+    /// button sits right of the traffic lights (~78 logical px).
+    pub(super) fn update_titlebar(&mut self) {
+        let height = self.titlebar_height_px();
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_titlebar(height, 78.0 * scale);
+        }
     }
 
     /// Sidebar width in physical pixels (0 when hidden).
@@ -82,11 +111,12 @@ impl App {
         let pad_y = padding_y(&self.config, window);
         let _ = renderer;
         let sidebar_w = self.sidebar_width_px();
+        let titlebar_h = self.titlebar_height_px();
         let usable_w = (inner_size.width as f32 - pad_x * 2.0 - sidebar_w).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - titlebar_h).max(0.0);
         Some(flux_types::Rect::new(
             sidebar_w + pad_x,
-            pad_y,
+            titlebar_h + pad_y,
             usable_w,
             usable_h,
         ))

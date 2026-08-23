@@ -39,6 +39,10 @@ pub(crate) use popup::PopupState;
 /// Minimum rows reserved for the input bar: one divider + one input line.
 pub(crate) const MIN_INPUT_BAR_ROWS: usize = 2;
 
+/// Height of the custom titlebar strip in logical pixels (macOS
+/// unified chrome; zero elsewhere — native decorations remain).
+pub(crate) const TITLEBAR_LOGICAL_H: f32 = if cfg!(target_os = "macos") { 34.0 } else { 0.0 };
+
 /// Application state — owns the window, renderer, PTY, and terminal state.
 pub struct App {
     pub(crate) config: FluxConfig,

@@ -17,12 +17,24 @@ use super::{App, MIN_INPUT_BAR_ROWS};
 
 impl App {
     pub(super) fn initialize(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
-        let window_attrs = Window::default_attributes()
+        #[allow(unused_mut)]
+        let mut window_attrs = Window::default_attributes()
             .with_title(&self.config.window.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.config.window.width,
                 self.config.window.height,
             ));
+        // Unified chrome (Warp-style): transparent native titlebar with
+        // full-size content — Flux paints its own strip under the
+        // traffic lights and puts persistent buttons there.
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            window_attrs = window_attrs
+                .with_titlebar_transparent(true)
+                .with_fullsize_content_view(true)
+                .with_title_hidden(true);
+        }
 
         let window = Arc::new(event_loop.create_window(window_attrs)?);
         let mut renderer = self.create_renderer(&window)?;
@@ -42,8 +54,9 @@ impl App {
         } else {
             0.0
         };
+        let titlebar_h = crate::app::TITLEBAR_LOGICAL_H * scale_factor;
         let usable_w = (inner_size.width as f32 - pad_x * 2.0 - sidebar_w).max(0.0);
-        let usable_h = (inner_size.height as f32 - pad_y * 2.0).max(0.0);
+        let usable_h = (inner_size.height as f32 - pad_y * 2.0 - titlebar_h).max(0.0);
         let cols = (usable_w / metrics.width) as usize;
         let total_rows = (usable_h / metrics.height) as usize;
         let rows = total_rows.saturating_sub(MIN_INPUT_BAR_ROWS);

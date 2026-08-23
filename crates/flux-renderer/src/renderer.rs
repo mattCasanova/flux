@@ -74,6 +74,10 @@ pub struct Renderer {
     pub(crate) frame_instances: Vec<CellInstance>,
     /// Transient one-line notice (top-center), e.g. close confirmation.
     pub(crate) notice_instances: Vec<CellInstance>,
+    /// Custom titlebar strip + its buttons.
+    pub(crate) titlebar_instances: Vec<CellInstance>,
+    /// Clickable rect of the titlebar's panel-toggle button.
+    pub(crate) titlebar_toggle: (f32, f32, f32, f32),
     /// Instances for the fixed input chrome — rebuilt on `set_input_line`.
     pub(crate) input_instances: Vec<CellInstance>,
     /// Instances for popup overlays (F7 autocomplete, F14 search
@@ -175,6 +179,8 @@ impl Renderer {
             pane_scrollbars: std::collections::HashMap::new(),
             frame_instances: Vec::new(),
             notice_instances: Vec::new(),
+            titlebar_instances: Vec::new(),
+            titlebar_toggle: (0.0, 0.0, 0.0, 0.0),
             input_instances: Vec::with_capacity(64),
             popup_instances: Vec::new(),
             selection_instances: Vec::new(),
