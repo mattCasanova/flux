@@ -228,6 +228,22 @@ impl App {
     /// dot) and push them to the renderer — skipped when nothing
     /// changed, so output floods don't churn the GPU buffers.
     pub(super) fn update_sidebar(&mut self) {
+        let height = self
+            .window
+            .as_ref()
+            .map(|w| w.inner_size().height)
+            .unwrap_or(0);
+        if !self.sidebar_visible {
+            // Collapsed: just the floating toggle icon.
+            let state = (Vec::new(), 0, 0, height);
+            if self.last_sidebar.as_ref() != Some(&state) {
+                self.last_sidebar = Some(state);
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_sidebar_collapsed_icon();
+                }
+            }
+            return;
+        }
         let width = self.sidebar_width_px();
         let mut entries: Vec<flux_renderer::SidebarEntry> = Vec::new();
         for tab in &self.mux.tabs {
@@ -235,24 +251,17 @@ impl App {
                 .focused_pane()
                 .and_then(|p| p.terminal.cwd().map(|c| c.to_path_buf()));
             let branch = cwd.as_deref().and_then(git_branch);
-            let folder = cwd
-                .as_deref()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-            let subtitle = match (branch, folder) {
-                (Some(b), Some(f)) => format!("{b} · {f}"),
-                (Some(b), None) => b,
-                (None, Some(f)) => f,
-                (None, None) => String::new(),
-            };
             let running = tab.root.panes().iter().any(|p| p.terminal.is_executing());
             entries.push(flux_renderer::SidebarEntry {
                 title: tab_label(tab),
-                subtitle,
+                subtitle: branch.unwrap_or_default(),
                 running,
             });
         }
         let focused = self.mux.current_tab;
-        let state = (entries.clone(), focused, width as u32);
+        // Height is part of the state: the panel spans the window, so a
+        // resize must rebuild even when the entries didn't change.
+        let state = (entries.clone(), focused, width as u32, height);
         if self.last_sidebar.as_ref() == Some(&state) {
             return;
         }
@@ -260,6 +269,16 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_sidebar(&entries, focused, width);
         }
+    }
+
+    /// True when a click lands on the panel-toggle icon (shown in the
+    /// sidebar header, or floating top-left when collapsed).
+    pub(super) fn sidebar_toggle_at_pixel(&self, x: f64, y: f64) -> bool {
+        let (ix, iy, iw, ih) = flux_renderer::TOGGLE_RECT;
+        x >= ix as f64 - 4.0
+            && x < (ix + iw) as f64 + 4.0
+            && y >= iy as f64 - 4.0
+            && y < (iy + ih) as f64 + 4.0
     }
 
     /// Which sidebar entry a click lands on, if inside the panel.
@@ -283,11 +302,6 @@ impl App {
     pub(super) fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
         self.last_sidebar = None;
-        if !self.sidebar_visible
-            && let Some(renderer) = &mut self.renderer
-        {
-            renderer.hide_sidebar();
-        }
         self.apply_window_layout();
         self.update_display();
         self.update_input_display();
@@ -348,16 +362,22 @@ fn git_branch(cwd: &std::path::Path) -> Option<String> {
     None
 }
 
-/// Label for a tab: the shell-set title if any, else the cwd's last
-/// component, else the shell.
+/// Label for a tab: just the current folder's name — it's always the
+/// user on their own machine, so `user@host` titles are noise
+/// (dogfood 08-23). Home shows as `~`; the shell-set OSC title is
+/// only a fallback when no cwd is known yet.
 fn tab_label(tab: &crate::mux::Tab) -> String {
-    if let Some(title) = &tab.title
-        && !title.is_empty()
-    {
-        return title.clone();
+    if let Some(cwd) = tab.focused_pane().and_then(|p| p.terminal.cwd()) {
+        if dirs::home_dir().is_some_and(|home| home == cwd) {
+            return "~".to_string();
+        }
+        if let Some(name) = cwd.file_name() {
+            return name.to_string_lossy().into_owned();
+        }
+        return "/".to_string();
     }
-    tab.focused_pane()
-        .and_then(|p| p.terminal.cwd())
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "shell".to_string())
+    match &tab.title {
+        Some(title) if !title.is_empty() => title.clone(),
+        _ => "shell".to_string(),
+    }
 }

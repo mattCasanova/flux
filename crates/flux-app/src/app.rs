@@ -77,7 +77,7 @@ pub struct App {
     pub(crate) sidebar_visible: bool,
     /// Last sidebar state pushed to the renderer — skip identical
     /// rebuilds during output floods.
-    pub(crate) last_sidebar: Option<(Vec<flux_renderer::SidebarEntry>, usize, u32)>,
+    pub(crate) last_sidebar: Option<(Vec<flux_renderer::SidebarEntry>, usize, u32, u32)>,
     /// Fractional scroll remainder from trackpad pixel deltas — whole
     /// lines are consumed per wheel event, the rest accumulates here.
     pub(crate) scroll_accum: f32,

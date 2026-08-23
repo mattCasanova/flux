@@ -165,6 +165,10 @@ impl App {
         // (the bar sits outside the grid, so nothing below cares).
         if matches!(state, ElementState::Pressed) {
             let pos = self.mouse.last_cursor_pos;
+            if self.sidebar_toggle_at_pixel(pos.x, pos.y) {
+                self.toggle_sidebar();
+                return;
+            }
             if let Some(index) = self.tab_at_pixel(pos.x, pos.y) {
                 self.select_tab(index);
                 return;

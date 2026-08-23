@@ -112,8 +112,8 @@ bright_white   = "#e0e6ff"
 # selection = "#7aa2f74d"   # last byte = opacity
 
 [sidebar]
-# The left tab panel: title, branch · folder, and a running-command
-# dot per tab. Cmd+Shift+B (toggle_sidebar) shows/hides it live.
+# The left tab panel: current folder, branch, and a running-command
+# dot per tab. Cmd+B (toggle_sidebar) or the panel icon shows/hides it.
 visible = true
 # Width in logical pixels.
 width = 230
@@ -163,4 +163,4 @@ enabled = true
 # split_down       = "cmd+shift+d"
 # close_pane       = "cmd+shift+w"
 # focus_pane_left  = "cmd+alt+left"    # …_right, _up, _down
-# toggle_sidebar   = "cmd+shift+b"
+# toggle_sidebar   = "cmd+b"

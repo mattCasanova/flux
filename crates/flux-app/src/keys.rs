@@ -348,7 +348,7 @@ impl Keymap {
         bind(Action::FocusPaneRight, format!("{primary}+alt+right"));
         bind(Action::FocusPaneUp, format!("{primary}+alt+up"));
         bind(Action::FocusPaneDown, format!("{primary}+alt+down"));
-        bind(Action::ToggleSidebar, format!("{primary}+shift+b"));
+        bind(Action::ToggleSidebar, format!("{edit}+b"));
         map
     }
 
