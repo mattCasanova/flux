@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          rustup update stable && rustup default stable
+          rustup target add x86_64-apple-darwin
+
+      - name: Build (Apple Silicon)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build (Intel)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Package
+        run: |
+          tar czf flux-aarch64-apple-darwin.tar.gz -C target/aarch64-apple-darwin/release flux
+          tar czf flux-x86_64-apple-darwin.tar.gz -C target/x86_64-apple-darwin/release flux
+          shasum -a 256 flux-*.tar.gz > checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            flux-aarch64-apple-darwin.tar.gz
+            flux-x86_64-apple-darwin.tar.gz
+            checksums.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
