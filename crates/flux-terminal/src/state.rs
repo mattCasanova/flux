@@ -179,6 +179,17 @@ struct ViewPlan {
 /// previous run back in.
 const CLEAR_KEEP_OUTPUT_ROWS: AbsRow = 2;
 
+/// Opaque source-over blend; the tint's alpha is the strength.
+fn blend_cell(bg: Color, tint: Color) -> Color {
+    let a = tint.a;
+    Color::new(
+        tint.r * a + bg.r * (1.0 - a),
+        tint.g * a + bg.g * (1.0 - a),
+        tint.b * a + bg.b * (1.0 - a),
+        1.0,
+    )
+}
+
 /// Human duration for the block header: sub-second in ms, sub-minute
 /// in tenths of a second, else m+s.
 fn format_duration(d: std::time::Duration) -> String {
@@ -253,6 +264,9 @@ pub struct TerminalState {
     blocks_enabled: bool,
     /// Active search (F14): compiled regex + the focused match.
     search: Option<SearchState>,
+    /// Selected block (click / Cmd+Up/Down), identified by its span's
+    /// `prompt_start` so it survives scrolling. Highlighted whole.
+    selected_block: Option<AbsRow>,
     /// Resolved color palette for named/indexed ANSI colors.
     theme: ResolvedTheme,
     event_rx: mpsc::Receiver<TermEvent>,
@@ -288,6 +302,7 @@ impl TerminalState {
             view_floor: 0,
             blocks_enabled: true,
             search: None,
+            selected_block: None,
             event_rx: rx,
             cols,
             rows,
@@ -376,11 +391,11 @@ impl TerminalState {
         (!text.is_empty()).then_some(text)
     }
 
-    /// Select the whole block (header + output) whose header row is at
-    /// viewport `row` — the double-click-header gesture. The selection
-    /// is alacritty's content-anchored Lines selection, so it survives
-    /// scrolling and `selection_text` / Cmd+C work on it. Returns false
-    /// when the row isn't a block header.
+    /// Select the block covering viewport `row` (header OR output) —
+    /// the single-click gesture. The whole block gets the highlight
+    /// tint; identity is the span's `prompt_start`, so it survives
+    /// scrolling. Returns false when the row is in no block (the
+    /// caller clears any existing selection then).
     pub fn select_block_at_row(&mut self, row: usize) -> bool {
         if !self.blocks_enabled || self.is_alt_screen() {
             return false;
@@ -388,40 +403,114 @@ impl TerminalState {
         let history = self.term.grid().history_size();
         let offset = self.display_offset() + self.view_bump;
         let abs = self.tracker.abs(history, row as i32 - offset as i32);
-        let Some(span) = self
+        let span = self
             .tracker
             .spans()
-            .find(|s| !s.at_prompt() && s.prompt_start <= abs && abs < s.header_end())
-            .copied()
-        else {
+            .find(|s| !s.at_prompt() && s.prompt_start <= abs && abs < s.end.unwrap_or(AbsRow::MAX))
+            .copied();
+        match span {
+            Some(span) => {
+                self.selected_block = Some(span.prompt_start);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn clear_block_selection(&mut self) {
+        self.selected_block = None;
+    }
+
+    pub fn has_block_selection(&self) -> bool {
+        self.selected_block.is_some()
+    }
+
+    /// Move the block selection to the previous (`-1`) / next (`+1`)
+    /// block, scrolling it into view. With nothing selected, selects
+    /// the newest block. Clamps at both ends.
+    pub fn select_block_step(&mut self, step: i32) -> bool {
+        if !self.blocks_enabled || self.is_alt_screen() {
             return false;
+        }
+        let starts: Vec<AbsRow> = self
+            .tracker
+            .spans()
+            .filter(|s| !s.at_prompt())
+            .map(|s| s.prompt_start)
+            .collect();
+        if starts.is_empty() {
+            return false;
+        }
+        let target = match self
+            .selected_block
+            .and_then(|id| starts.iter().position(|&s| s == id))
+        {
+            None => starts.len() - 1,
+            Some(idx) => {
+                let next = idx as i64 + step as i64;
+                if next < 0 || next >= starts.len() as i64 {
+                    return false; // clamp — no wrap, edges are edges
+                }
+                next as usize
+            }
         };
+        self.selected_block = Some(starts[target]);
+        self.ensure_block_visible(starts[target]);
+        true
+    }
+
+    /// Scroll so the selected block's header is on screen (top-aligned
+    /// when it was off-screen; no scroll when already visible).
+    fn ensure_block_visible(&mut self, prompt_start: AbsRow) {
+        let history = self.term.grid().history_size();
+        let offset = self.display_offset() as i64;
+        let line = self.tracker.line(history, prompt_start);
+        let top = -offset;
+        let bottom = top + self.rows as i64;
+        if line >= top && line < bottom {
+            return;
+        }
+        let want = (-line).clamp(0, history as i64);
+        self.term
+            .scroll_display(Scroll::Delta((want - offset) as i32));
+    }
+
+    /// Full text (command + output) of the selected block, for Cmd+C
+    /// when no text selection exists.
+    pub fn selected_block_text(&self) -> Option<String> {
+        let id = self.selected_block?;
+        let span = *self.tracker.spans().find(|s| s.prompt_start == id)?;
+        let history = self.term.grid().history_size();
         let last_abs = match span.end {
-            // `end` is one past the last output row.
             Some(end) => (end - 1).max(span.prompt_start),
-            // Still running: select through the current cursor row.
             None => self
                 .tracker
                 .abs(history, self.term.grid().cursor.point.line.0)
                 .max(span.prompt_start),
         };
-        let start_line = self.tracker.line(history, span.prompt_start);
-        let end_line = self.tracker.line(history, last_abs);
-        // Clamp to what scrollback still holds.
         let top = -(history as i64);
-        if end_line < top {
-            return false;
+        let mut out = String::new();
+        for abs in span.prompt_start..=last_abs {
+            let line = self.tracker.line(history, abs);
+            if line < top {
+                continue;
+            }
+            let grid_row = &self.term.grid()[Line(line as i32)];
+            let mut row_text = String::new();
+            for col in 0..self.cols {
+                let ch = grid_row[Column(col)].c;
+                if ch != '\0' {
+                    row_text.push(ch);
+                }
+            }
+            out.push_str(row_text.trim_end());
+            out.push('\n');
         }
-        let start_line = start_line.max(top);
-        let start = Point::new(Line(start_line as i32), Column(0));
-        let end = Point::new(Line(end_line as i32), Column(self.cols.saturating_sub(1)));
-        let mut selection = Selection::new(SelectionType::Lines, start, Side::Left);
-        selection.update(end, Side::Right);
-        self.term.selection = Some(selection);
-        true
+        let out = out.trim_end().to_string();
+        (!out.is_empty()).then_some(out)
     }
 
-    /// The output text of the most recent finished block, trailing
+    /// The output text of the most recent finished block, trailing    /// The output text of the most recent finished block, trailing
     /// whitespace trimmed per line — Cmd+Shift+C's "copy what just
     /// happened" without a selection. None when there is no finished
     /// block or its rows have left scrollback.
@@ -837,6 +926,11 @@ impl TerminalState {
         let mut grid = self.snapshot_viewport();
         grid.display_offset = user_offset;
 
+        if let Some(id) = self.selected_block
+            && !self.tracker.spans().any(|s| s.prompt_start == id)
+        {
+            self.selected_block = None; // block pruned or cleared away
+        }
         if self.blocks_enabled && !self.is_alt_screen() {
             let offset = user_offset + self.view_bump;
             self.decorate_spans(&mut grid, offset);
@@ -1083,6 +1177,27 @@ impl TerminalState {
                 continue;
             }
             self.decorate_header(grid, span, lo, header_end);
+        }
+
+        // Selected-block highlight: tint EVERY visible row of the
+        // selected block (header + output) with the accent-derived
+        // block_selected color (alpha = strength).
+        if let Some(id) = self.selected_block
+            && let Some(span) = self.tracker.spans().find(|s| s.prompt_start == id).copied()
+        {
+            let last = span.end.unwrap_or(hi).min(hi);
+            let tint = self.theme.ui.block_selected;
+            for abs in span.prompt_start.max(lo)..last {
+                let row = (abs - lo) as usize;
+                if row >= self.rows {
+                    break;
+                }
+                for col in 0..self.cols {
+                    let mut cell = *grid.get(row, col);
+                    cell.bg = blend_cell(cell.bg, tint);
+                    grid.set(row, col, cell);
+                }
+            }
         }
     }
 
@@ -1997,7 +2112,7 @@ mod tests {
     // ---- block copy gestures ----
 
     #[test]
-    fn select_block_at_row_selects_command_and_output() {
+    fn click_selects_a_block_by_any_of_its_rows_and_copy_gets_it_all() {
         let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
         cycle(&mut state, "~ >", "ls", &["a", "b"], 0);
         cycle(&mut state, "~ >", "true", &[], 0);
@@ -2008,17 +2123,58 @@ mod tests {
         let header_row = (0..grid.rows)
             .find(|&r| TerminalState::grid_row_text(&grid, r).starts_with("~ >ls"))
             .expect("ls header visible");
-        assert!(state.select_block_at_row(header_row));
-        let text = state.selection_text().expect("block selected");
+
+        // Output rows select the same block as the header row.
+        assert!(state.select_block_at_row(header_row + 1));
+        let text = state.selected_block_text().expect("block selected");
         assert!(text.starts_with("~ >ls"), "{text:?}");
         assert!(
             text.contains("\na\n") && text.trim_end().ends_with('b'),
             "{text:?}"
         );
-        assert!(
-            !state.select_block_at_row(header_row + 1),
-            "output rows are not the double-click target"
+
+        // The highlight tints every row of the block, not just headers.
+        let grid = state.grid_snapshot();
+        let theme = ResolvedTheme::default();
+        let plain_output_bg = grid.get(header_row + 3, 0).bg; // `true` block's rows
+        assert_ne!(
+            grid.get(header_row + 1, 0).bg,
+            theme.background,
+            "selected output row is tinted"
         );
+        let _ = plain_output_bg;
+
+        // A row in no block reports false (caller clears).
+        assert!(!state.select_block_at_row(23));
+        state.clear_block_selection();
+        assert!(!state.has_block_selection());
+    }
+
+    #[test]
+    fn block_selection_steps_with_clamping_and_scrolls_into_view() {
+        let mut state = TerminalState::new(80, 24, 1000, ResolvedTheme::default());
+        let filler: Vec<String> = (0..30).map(|i| format!("x {i}")).collect();
+        let refs: Vec<&str> = filler.iter().map(|s| s.as_str()).collect();
+        cycle(&mut state, "~ >", "old", &refs, 0);
+        cycle(&mut state, "~ >", "new", &["y"], 0);
+        state.process_bytes(A);
+        state.process_bytes(b"~ >");
+        state.process_bytes(B);
+
+        // Nothing selected + step selects the NEWEST block.
+        assert!(state.select_block_step(-1));
+        let text = state.selected_block_text().unwrap();
+        assert!(text.starts_with("~ >new"), "{text:?}");
+        // Up again: the older block, scrolled into view.
+        assert!(state.select_block_step(-1));
+        let text = state.selected_block_text().unwrap();
+        assert!(text.starts_with("~ >old"), "{text:?}");
+        assert!(state.display_offset() > 0, "scrolled up to show it");
+        // Clamped at the oldest.
+        assert!(!state.select_block_step(-1));
+        // Back down to the newest, then clamp.
+        assert!(state.select_block_step(1));
+        assert!(!state.select_block_step(1));
     }
 
     #[test]

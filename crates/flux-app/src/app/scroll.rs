@@ -126,12 +126,13 @@ impl App {
         }
     }
 
-    /// Scroll so the previous / next block header sits at the top of
-    /// the viewport (Cmd+Shift+Up / Down).
-    pub(super) fn jump_block(&mut self, step: i32) {
+    /// Move the block selection up/down (Cmd+Up / Cmd+Down): the
+    /// highlight steps to the previous / next block and scrolls it
+    /// into view — Warp's block-cursor feel.
+    pub(super) fn step_block_selection(&mut self, step: i32) {
         let moved = self
             .pane_mut()
-            .map(|pane| pane.terminal.scroll_to_block(step))
+            .map(|pane| pane.terminal.select_block_step(step))
             .unwrap_or(false);
         if moved {
             self.update_display();

@@ -212,42 +212,9 @@ impl App {
             ElementState::Released => {
                 self.mouse.is_dragging = false;
                 self.mouse.autoscroll = 0;
-                self.maybe_load_block_command();
+                self.maybe_select_block();
             }
         }
-    }
-
-    /// A plain single click (no drag) on a block's header row loads
-    /// that command into the input bar — re-run is then just Enter
-    /// (issue #26's minimal form). Anything that selected text is a
-    /// selection, not a click.
-    fn maybe_load_block_command(&mut self) {
-        if self.raw_mode || self.mouse.click_count != 1 {
-            return;
-        }
-        let selected = self
-            .terminal()
-            .map(|t| t.selection_text().is_some())
-            .unwrap_or(false);
-        if selected {
-            return;
-        }
-        let Some(cell) = self.pixel_to_cell(self.mouse.last_cursor_pos) else {
-            return;
-        };
-        let Some(command) = self
-            .terminal()
-            .and_then(|t| t.block_command_at_row(cell.row))
-        else {
-            return;
-        };
-        self.clear_selection();
-        if let Some(editor) = self.input_mut() {
-            editor.clear();
-            editor.insert_str(&command);
-        }
-        self.update_input_display();
-        self.request_redraw();
     }
 
     fn handle_mouse_pressed(&mut self) {
@@ -290,14 +257,20 @@ impl App {
         };
         let right_side = self.pointer_in_right_half(pos);
 
-        // Double-click on a block HEADER selects the whole block
-        // (command + output) — Cmd+C then copies it. Elsewhere,
-        // double-click keeps its word-select meaning.
+        // Double-click on a block HEADER loads its command into the
+        // input bar for re-run. Elsewhere, double-click keeps its
+        // word-select meaning.
         if self.mouse.click_count == 2
-            && let Some(pane) = self.pane_mut()
-            && pane.terminal.select_block_at_row(cell.row)
+            && !self.raw_mode
+            && let Some(command) = self
+                .terminal()
+                .and_then(|t| t.block_command_at_row(cell.row))
         {
-            self.update_display();
+            if let Some(editor) = self.input_mut() {
+                editor.clear();
+                editor.insert_str(&command);
+            }
+            self.update_input_display();
             self.request_redraw();
             return;
         }
@@ -324,6 +297,45 @@ impl App {
         }
         self.update_display();
         self.request_redraw();
+    }
+
+    /// A plain single click (no drag): select the block under the
+    /// pointer — the whole block highlights, Warp-style — or clear the
+    /// highlight when the click landed on no block. Anything that
+    /// selected text is a selection, not a click.
+    fn maybe_select_block(&mut self) {
+        if self.raw_mode || self.mouse.click_count != 1 {
+            return;
+        }
+        let selected_text = self
+            .terminal()
+            .map(|t| t.selection_text().is_some())
+            .unwrap_or(false);
+        if selected_text {
+            return;
+        }
+        let cell = self.pixel_to_cell(self.mouse.last_cursor_pos);
+        let changed = match (cell, self.pane_mut()) {
+            (Some(cell), Some(pane)) => {
+                if pane.terminal.select_block_at_row(cell.row) {
+                    true
+                } else {
+                    let had = pane.terminal.has_block_selection();
+                    pane.terminal.clear_block_selection();
+                    had
+                }
+            }
+            (None, Some(pane)) => {
+                let had = pane.terminal.has_block_selection();
+                pane.terminal.clear_block_selection();
+                had
+            }
+            _ => false,
+        };
+        if changed {
+            self.update_display();
+            self.request_redraw();
+        }
     }
 
     /// Lines-per-tick the drag wants to autoscroll, from how far the

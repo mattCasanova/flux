@@ -15,7 +15,11 @@ impl App {
     /// from the terminal's content-anchored selection, so it can span
     /// scrollback well beyond the visible screen.
     pub(super) fn handle_copy(&mut self) -> bool {
-        let Some(text) = self.terminal().and_then(|t| t.selection_text()) else {
+        let text = self
+            .terminal()
+            .and_then(|t| t.selection_text())
+            .or_else(|| self.terminal().and_then(|t| t.selected_block_text()));
+        let Some(text) = text else {
             return false;
         };
         self.set_clipboard_text(text);

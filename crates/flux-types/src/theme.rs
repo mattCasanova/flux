@@ -29,6 +29,9 @@ pub struct UiColors {
     pub cursor_text: Color,
     /// Selection tint blended over cell backgrounds (alpha applies).
     pub selection: Color,
+    /// Whole-block highlight when a block is selected (click /
+    /// Cmd+Up/Down). Alpha applies.
+    pub block_selected: Color,
     /// Search match tint (alpha applies).
     pub search_match: Color,
     /// Focused search match tint (alpha applies).
@@ -71,6 +74,7 @@ impl UiColors {
             cursor,
             cursor_text: background,
             selection: with_alpha(accent, 0.30),
+            block_selected: with_alpha(accent, 0.20),
             search_match: with_alpha(ansi[3], 0.35),
             search_focus: with_alpha(hex("#ff9e64"), 0.65),
             scrollbar_thumb: Color::new(0.60, 0.65, 0.80, 0.55),
@@ -105,6 +109,7 @@ impl UiColors {
             "cursor" => &mut self.cursor,
             "cursor_text" => &mut self.cursor_text,
             "selection" => &mut self.selection,
+            "block_selected" => &mut self.block_selected,
             "search_match" => &mut self.search_match,
             "search_focus" => &mut self.search_focus,
             "scrollbar_thumb" => &mut self.scrollbar_thumb,

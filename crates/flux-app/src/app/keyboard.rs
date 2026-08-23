@@ -104,8 +104,8 @@ impl App {
             Action::ScrollLineDown => self.scroll_terminal(-1),
             Action::ScrollPageUp => self.scroll_page(true),
             Action::ScrollPageDown => self.scroll_page(false),
-            Action::PrevBlock => self.jump_block(-1),
-            Action::NextBlock => self.jump_block(1),
+            Action::PrevBlock => self.step_block_selection(-1),
+            Action::NextBlock => self.step_block_selection(1),
             Action::SplitRight => self.split_focused(crate::mux::SplitAxis::Horizontal),
             Action::SplitDown => self.split_focused(crate::mux::SplitAxis::Vertical),
             Action::ClosePane => self.close_focused_pane(),
@@ -346,6 +346,18 @@ impl App {
                 }
                 if self.terminal().map(|t| t.has_selection()).unwrap_or(false) {
                     self.clear_selection();
+                    return;
+                }
+                if self
+                    .terminal()
+                    .map(|t| t.has_block_selection())
+                    .unwrap_or(false)
+                {
+                    if let Some(pane) = self.pane_mut() {
+                        pane.terminal.clear_block_selection();
+                    }
+                    self.update_display();
+                    self.request_redraw();
                     return;
                 }
             }

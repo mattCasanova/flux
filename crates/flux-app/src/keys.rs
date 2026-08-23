@@ -330,12 +330,12 @@ impl Keymap {
         bind(Action::Paste, format!("{primary}+v"));
         bind(Action::Undo, format!("{edit}+z"));
         bind(Action::Redo, format!("{edit}+shift+z"));
-        bind(Action::ScrollLineUp, format!("{edit}+up"));
-        bind(Action::ScrollLineDown, format!("{edit}+down"));
+        bind(Action::ScrollLineUp, "alt+up".into());
+        bind(Action::ScrollLineDown, "alt+down".into());
         bind(Action::ScrollPageUp, "pageup".into());
         bind(Action::ScrollPageDown, "pagedown".into());
-        bind(Action::PrevBlock, format!("{edit}+shift+up"));
-        bind(Action::NextBlock, format!("{edit}+shift+down"));
+        bind(Action::PrevBlock, format!("{edit}+up"));
+        bind(Action::NextBlock, format!("{edit}+down"));
         bind(Action::SplitRight, format!("{primary}+d"));
         bind(Action::SplitDown, format!("{primary}+shift+d"));
         bind(Action::ClosePane, format!("{primary}+shift+w"));
