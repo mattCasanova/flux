@@ -141,7 +141,11 @@ enabled = true
 # super), ctrl, alt (also opt), shift. Keys: a single character, or up,
 # down, left, right, enter, tab, escape, backspace, delete, home, end,
 # pageup, pagedown, space, f1-f12. Modifiers must match exactly.
-# Defaults shown (macOS):
+# Defaults shown (macOS). On Linux: "cmd" chords become "ctrl+shift"
+# (window-level: new_tab, copy, find, …), editor chords "ctrl"
+# (undo, prev_block, toggle_sidebar), and the shifted siblings
+# (copy_block_output, split_down, close_pane) use "ctrl+alt". These
+# are placeholders until the keymap design pass.
 # new_tab          = "cmd+t"
 # close_tab        = "cmd+w"
 # next_tab         = "cmd+]"

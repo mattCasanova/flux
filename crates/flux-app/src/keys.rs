@@ -312,15 +312,31 @@ pub struct Keymap {
 impl Keymap {
     /// Platform defaults: Cmd-based on macOS, Ctrl(+Shift) elsewhere.
     pub fn defaults() -> Self {
-        let mac = cfg!(target_os = "macos");
+        Self::defaults_for(cfg!(target_os = "macos"))
+    }
+
+    /// Defaults for a given platform — split out so tests can check
+    /// BOTH layouts on any host (a Linux-only chord collision reached
+    /// CI once; see `defaults_have_no_collisions_on_either_platform`).
+    ///
+    /// Three modifier tiers: `primary` for the window-level actions,
+    /// `edit` for editor-ish ones, `secondary` for the "shifted
+    /// sibling" of a primary action (copy → copy block, split right →
+    /// split down, close tab → close pane). On Linux `primary` already
+    /// carries Shift, so the sibling tier uses Alt instead. These are
+    /// placeholders until the Omarchy-style keymap pass.
+    pub fn defaults_for(mac: bool) -> Self {
         let primary = if mac { "cmd" } else { "ctrl+shift" };
         let edit = if mac { "cmd" } else { "ctrl" };
+        let secondary = if mac { "cmd+shift" } else { "ctrl+alt" };
         let mut map = Keymap {
             bindings: HashMap::new(),
         };
         let mut bind = |action: Action, chord: String| {
             let chord = Chord::parse(&chord).expect("default chord parses");
-            map.bindings.insert(chord, action);
+            if let Some(prev) = map.bindings.insert(chord, action) {
+                panic!("default chord collision: {prev:?} and {action:?}");
+            }
         };
         bind(Action::NewTab, format!("{primary}+t"));
         bind(Action::CloseTab, format!("{primary}+w"));
@@ -331,7 +347,7 @@ impl Keymap {
         }
         bind(Action::Find, format!("{primary}+f"));
         bind(Action::Copy, format!("{primary}+c"));
-        bind(Action::CopyBlockOutput, format!("{edit}+shift+c"));
+        bind(Action::CopyBlockOutput, format!("{secondary}+c"));
         bind(Action::Paste, format!("{primary}+v"));
         bind(Action::Undo, format!("{edit}+z"));
         bind(Action::Redo, format!("{edit}+shift+z"));
@@ -342,8 +358,8 @@ impl Keymap {
         bind(Action::PrevBlock, format!("{edit}+up"));
         bind(Action::NextBlock, format!("{edit}+down"));
         bind(Action::SplitRight, format!("{primary}+d"));
-        bind(Action::SplitDown, format!("{primary}+shift+d"));
-        bind(Action::ClosePane, format!("{primary}+shift+w"));
+        bind(Action::SplitDown, format!("{secondary}+d"));
+        bind(Action::ClosePane, format!("{secondary}+w"));
         bind(Action::FocusPaneLeft, format!("{primary}+alt+left"));
         bind(Action::FocusPaneRight, format!("{primary}+alt+right"));
         bind(Action::FocusPaneUp, format!("{primary}+alt+up"));
@@ -465,6 +481,15 @@ mod tests {
         assert!(Chord::parse("cmd+").is_err());
         assert!(Chord::parse("cmd+bogus").is_err());
         assert!(Chord::parse("cmd+a+b").is_err());
+    }
+
+    /// Both platform layouts, checked on any host: every action bound,
+    /// and `bind` panics on a collision (which is what Linux CI hit —
+    /// ctrl+shift+c doubled as copy AND copy_block_output).
+    #[test]
+    fn defaults_have_no_collisions_on_either_platform() {
+        assert!(Keymap::defaults_for(true).all_actions_bound(), "macOS");
+        assert!(Keymap::defaults_for(false).all_actions_bound(), "Linux");
     }
 
     #[test]
