@@ -93,9 +93,9 @@ impl Renderer {
                     self.ui.tab_bg
                 };
 
-                // Line 1: running dot + title.
+                // Line 1: running dot + title. Column 0 is the dot's
+                // slot (reserved even when idle), title from column 2.
                 let title_y = top + (entry_h * 0.5 - cell_h).max(0.0);
-                let mut col = 0usize;
                 if entry.running {
                     self.render_glyph(
                         '●',
@@ -108,42 +108,43 @@ impl Renderer {
                         &mut instances,
                     );
                 }
-                col += 2; // dot column + gap, reserved even when idle
-                for ch in truncated(&entry.title, text_cols.saturating_sub(col)) {
-                    let x = TEXT_INSET + col as f32 * cell_w;
-                    if ch != ' ' {
-                        self.render_glyph(
-                            ch,
-                            style,
-                            x,
-                            title_y,
-                            baseline,
-                            title_fg,
-                            bg,
-                            &mut instances,
-                        );
+                const TEXT_COL: usize = 2;
+                let title_chars = truncated(&entry.title, text_cols.saturating_sub(TEXT_COL));
+                for (i, ch) in title_chars.into_iter().enumerate() {
+                    if ch == ' ' {
+                        continue;
                     }
-                    col += 1;
+                    let x = TEXT_INSET + (TEXT_COL + i) as f32 * cell_w;
+                    self.render_glyph(
+                        ch,
+                        style,
+                        x,
+                        title_y,
+                        baseline,
+                        title_fg,
+                        bg,
+                        &mut instances,
+                    );
                 }
 
                 // Line 2: dim subtitle.
                 let sub_y = title_y + cell_h;
-                let mut col = 2usize;
-                for ch in truncated(&entry.subtitle, text_cols.saturating_sub(col)) {
-                    let x = TEXT_INSET + col as f32 * cell_w;
-                    if ch != ' ' {
-                        self.render_glyph(
-                            ch,
-                            style,
-                            x,
-                            sub_y,
-                            baseline,
-                            self.ui.input_dim,
-                            bg,
-                            &mut instances,
-                        );
+                let sub_chars = truncated(&entry.subtitle, text_cols.saturating_sub(TEXT_COL));
+                for (i, ch) in sub_chars.into_iter().enumerate() {
+                    if ch == ' ' {
+                        continue;
                     }
-                    col += 1;
+                    let x = TEXT_INSET + (TEXT_COL + i) as f32 * cell_w;
+                    self.render_glyph(
+                        ch,
+                        style,
+                        x,
+                        sub_y,
+                        baseline,
+                        self.ui.input_dim,
+                        bg,
+                        &mut instances,
+                    );
                 }
             }
 
