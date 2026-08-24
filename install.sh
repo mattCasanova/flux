@@ -3,9 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/mattCasanova/flux/master/install.sh | sh
 #
-# Downloads the latest release binary for this Mac and installs it to
-# ~/.local/bin (override with FLUX_INSTALL_DIR). No Rust toolchain
-# needed. Linux: build from source for now (see README).
+# Downloads the latest release binary for this machine (macOS or
+# Linux, x86_64 or arm64) and installs it to ~/.local/bin (override
+# with FLUX_INSTALL_DIR). No Rust toolchain needed.
 
 set -eu
 
@@ -13,8 +13,9 @@ REPO="mattCasanova/flux"
 
 case "$(uname -s)" in
     Darwin) os="apple-darwin" ;;
+    Linux) os="unknown-linux-gnu" ;;
     *)
-        echo "flux: prebuilt binaries are macOS-only so far." >&2
+        echo "flux: no prebuilt binary for $(uname -s)." >&2
         echo "Build from source: cargo install --git https://github.com/${REPO} flux-app" >&2
         exit 1
         ;;
